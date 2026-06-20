@@ -118,9 +118,11 @@ export default function RecordPanel() {
     transcript,
     result,
     error,
+    sessionId,
     startRecording,
     stopRecording,
     reset,
+    endSession,
     submitText,
   } = useCoach()
 
@@ -305,6 +307,21 @@ export default function RecordPanel() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Session indicator — utterances group into one session until ended */}
+      {isIdle && sessionId != null && (
+        <div className="flex items-center gap-2 text-xs text-muted">
+          <span className="w-1.5 h-1.5 rounded-full bg-green-500/70" />
+          <span className="font-mono">Session #{sessionId}</span>
+          <span>·</span>
+          <button
+            onClick={endSession}
+            className="hover:text-text-primary transition-colors underline underline-offset-2"
+          >
+            New session
+          </button>
         </div>
       )}
     </div>

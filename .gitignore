@@ -1,6 +1,11 @@
 # dependencies
 node_modules/
 
+# python (stt-server)
+stt-server/.venv/
+__pycache__/
+*.pyc
+
 # Next.js build output
 .next/
 out/

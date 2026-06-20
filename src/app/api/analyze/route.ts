@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getLLMProvider } from '@/lib/providers/llm'
 import { parseStructure, buildAnalysisPrompt } from '@/lib/parsers/structure'
-import { createSession, saveUtterance } from '@/lib/db'
+import { createSession, saveUtterance, getSession } from '@/lib/db'
 import type { AnalyzeRequest, AnalyzeResponse, UtteranceFeedback } from '@/types'
 
 export async function POST(req: NextRequest) {
@@ -42,8 +42,12 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 4. Persist to DB
-    const sessionId = existingSessionId ?? createSession().id
+    // 4. Persist to DB. Reuse the client's session when it still exists,
+    //    otherwise open a fresh one (guards against a stale localStorage id).
+    const sessionId =
+      existingSessionId != null && getSession(existingSessionId)
+        ? existingSessionId
+        : createSession().id
     const utterance = saveUtterance(sessionId, text, feedback)
 
     const response: AnalyzeResponse = {
