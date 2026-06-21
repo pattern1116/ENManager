@@ -100,5 +100,5 @@ async def transcribe(
 if __name__ == "__main__":
     import uvicorn
 
-    port = int(os.environ.get("STT_PORT", "8000"))
+    port = int(os.environ.get("STT_PORT", "9797"))
     uvicorn.run(app, host="127.0.0.1", port=port)

@@ -93,8 +93,34 @@ export default function FeedbackPanel() {
   const feedback: UtteranceFeedback | undefined = result?.feedback
   if (!feedback) return EMPTY_STATE
 
+  const practice = result?.practiceResult
+
   return (
     <div className="flex flex-col gap-5 fade-up">
+
+      {/* Practice target verdict — shown only for practice utterances */}
+      {practice && (
+        <section
+          className={[
+            'rounded-lg border px-3 py-2.5 flex items-start gap-2.5',
+            practice.hit
+              ? 'bg-green-950/30 border-green-800/50'
+              : 'bg-amber-950/20 border-amber-900/40',
+          ].join(' ')}
+        >
+          <span className={`mt-0.5 text-sm ${practice.hit ? 'text-green-400' : 'text-amber-400'}`}>
+            {practice.hit ? '✓' : '✗'}
+          </span>
+          <div>
+            <p className="text-xs font-medium text-muted uppercase tracking-wide">
+              Practice target · {practice.targetPattern}
+            </p>
+            <p className={`text-sm mt-0.5 ${practice.hit ? 'text-green-300' : 'text-amber-200'}`}>
+              {practice.message}
+            </p>
+          </div>
+        </section>
+      )}
 
       {/* Pattern */}
       <section>

@@ -178,6 +178,17 @@ describe('session aggregates', () => {
     const ids = listSessions().map(s => s.id)
     expect(ids.indexOf(newer)).toBeLessThan(ids.indexOf(older))
   })
+
+  it('breaks created_at ties deterministically by id DESC (Bug 4)', () => {
+    // Three sessions sharing the same second — without the id tie-break the
+    // order is non-deterministic. Newest-inserted (highest id) must come first.
+    const ts = '2026-03-01 12:00:00'
+    const ids = [0, 1, 2].map(
+      () => raw.prepare(`INSERT INTO sessions (created_at) VALUES ('${ts}')`).run().lastInsertRowid as number,
+    )
+    const listed = listSessions().map(s => s.id)
+    expect(listed).toEqual([...ids].reverse())
+  })
 })
 
 describe('getProgressReport — totals and weak points', () => {

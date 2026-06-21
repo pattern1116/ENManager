@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { createLLMProvider } from '@/lib/providers/llm'
 import { createSTTProvider } from '@/lib/providers/stt'
 import { buildFeedback } from '@/lib/feedback'
@@ -7,7 +7,24 @@ import type { UtteranceFeedback } from '@/types'
 const ORIG = { ...process.env }
 afterEach(() => {
   process.env = { ...ORIG }
+  vi.restoreAllMocks()
 })
+
+// Stub global fetch to capture the JSON body the provider sends, returning
+// an OpenAI-compatible response so complete() resolves cleanly.
+function stubFetch(json: unknown) {
+  const fetchMock = vi.fn(async () => ({
+    ok: true,
+    json: async () => json,
+    text: async () => '',
+  })) as unknown as typeof fetch
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock as unknown as ReturnType<typeof vi.fn>
+}
+
+function sentBody(fetchMock: ReturnType<typeof vi.fn>) {
+  return JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)
+}
 
 describe('createLLMProvider — factory selection', () => {
   const cases: [string, string][] = [
@@ -75,5 +92,40 @@ describe('mock providers produce usable output', () => {
     const transcript = await createSTTProvider().transcribe(new Blob(['x']))
     expect(typeof transcript).toBe('string')
     expect(transcript.length).toBeGreaterThan(0)
+  })
+})
+
+describe('temperature forwarding', () => {
+  const openAiResponse = { choices: [{ message: { content: '{}' } }] }
+  const ollamaResponse = { message: { content: '{}' } }
+
+  it('openai-compat sends temperature top-level when provided', async () => {
+    process.env.LLM_PROVIDER = 'openai-compat'
+    const fetchMock = stubFetch(openAiResponse)
+    await createLLMProvider().complete([{ role: 'user', content: 'hi' }], 'sys', { temperature: 0.2 })
+    expect(sentBody(fetchMock).temperature).toBe(0.2)
+  })
+
+  it('omits temperature entirely when no options are passed', async () => {
+    process.env.LLM_PROVIDER = 'openai-compat'
+    const fetchMock = stubFetch(openAiResponse)
+    await createLLMProvider().complete([{ role: 'user', content: 'hi' }], 'sys')
+    expect(sentBody(fetchMock)).not.toHaveProperty('temperature')
+  })
+
+  it('ollama nests temperature under options', async () => {
+    process.env.LLM_PROVIDER = 'ollama'
+    const fetchMock = stubFetch(ollamaResponse)
+    await createLLMProvider().complete([{ role: 'user', content: 'hi' }], 'sys', { temperature: 0.2 })
+    const body = sentBody(fetchMock)
+    expect(body).not.toHaveProperty('temperature')
+    expect(body.options.temperature).toBe(0.2)
+  })
+
+  it('openai sends temperature top-level when provided', async () => {
+    process.env.LLM_PROVIDER = 'openai'
+    const fetchMock = stubFetch(openAiResponse)
+    await createLLMProvider().complete([{ role: 'user', content: 'hi' }], 'sys', { temperature: 0.5 })
+    expect(sentBody(fetchMock).temperature).toBe(0.5)
   })
 })

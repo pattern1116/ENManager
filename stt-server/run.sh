@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the local mlx-whisper STT server on :8000
+# Start the local mlx-whisper STT server on :9797 (override with STT_PORT)
 # First run: ./run.sh --setup   (creates venv + installs deps)
 set -euo pipefail
 cd "$(dirname "$0")"

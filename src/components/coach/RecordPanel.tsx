@@ -148,16 +148,16 @@ export default function RecordPanel() {
     : null
 
   const handleMicClick = useCallback(() => {
-    if (recordingState === 'idle') startRecording()
+    if (recordingState === 'idle') startRecording(currentPrompt?.targetPattern ?? null)
     else if (recordingState === 'recording') stopRecording()
-  }, [recordingState, startRecording, stopRecording])
+  }, [recordingState, startRecording, stopRecording, currentPrompt])
 
   const handleTextSubmit = useCallback(() => {
     if (textInput.trim()) {
-      submitText(textInput.trim())
+      submitText(textInput.trim(), currentPrompt?.targetPattern ?? null)
       setTextInput('')
     }
-  }, [textInput, submitText])
+  }, [textInput, submitText, currentPrompt])
 
   const handleNext = useCallback(() => {
     reset()

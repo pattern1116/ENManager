@@ -97,7 +97,7 @@ export function listSessions(limit = 20): Session[] {
     FROM   sessions s
     LEFT JOIN utterances u ON u.session_id = s.id
     GROUP  BY s.id
-    ORDER  BY s.created_at DESC
+    ORDER  BY s.created_at DESC, s.id DESC
     LIMIT  ?
   `).all(limit) as any[]
   return rows.map(rowToSession)

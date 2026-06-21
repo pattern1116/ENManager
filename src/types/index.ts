@@ -91,6 +91,15 @@ export interface RecordingResult {
 export interface AnalyzeRequest {
   text: string
   sessionId?: number
+  targetPattern?: PatternType   // when the utterance answers a practice prompt
+}
+
+// Result of comparing a practice utterance against its target pattern.
+export interface PracticeResult {
+  targetPattern: PatternType
+  detectedPattern: PatternType
+  hit: boolean              // did the detected pattern match the target?
+  message: string          // short, human-readable verdict
 }
 
 export interface AnalyzeResponse {
@@ -98,6 +107,7 @@ export interface AnalyzeResponse {
   sessionId: number
   transcript: string
   feedback: UtteranceFeedback
+  practiceResult?: PracticeResult | null   // present only for practice utterances
 }
 
 export interface TranscribeRequest {
@@ -140,8 +150,12 @@ export interface Message {
   content: string
 }
 
+export interface CompletionOptions {
+  temperature?: number
+}
+
 export interface LLMProvider {
-  complete(messages: Message[], system: string): Promise<string>
+  complete(messages: Message[], system: string, opts?: CompletionOptions): Promise<string>
   readonly name: string
 }
 

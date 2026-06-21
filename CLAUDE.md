@@ -12,7 +12,7 @@
 
 ```
 [브라우저] ──녹음(webm/opus)──▶ Next.js API ──▶ provider 추상화 ──▶ 로컬 모델
-  RecordPanel                /api/transcribe ─▶ STT(stt.ts) ─────▶ mlx-whisper :8000
+  RecordPanel                /api/transcribe ─▶ STT(stt.ts) ─────▶ mlx-whisper :9797
   FeedbackPanel              /api/analyze    ─▶ 규칙파서 + LLM ──▶ Gemma :8001 (OpenAI 호환)
   CoachContext               /api/sessions   ─▶ DB(better-sqlite3) ─▶ data/speaking-coach.db
                              /api/practice·report ─▶ DB 집계 쿼리
@@ -30,8 +30,10 @@ cp .env.example .env.local   # 그다음 STT_PROVIDER=local 로 변경
 npm run db:init
 npm run dev                  # → http://localhost:5555
 
-# STT 실모델을 쓰려면 별도 터미널에서 mlx-whisper 서버 실행:
-cd stt-server && ./run.sh    # 첫 실행만 ./run.sh --setup (venv + 의존성)
+# STT 실모델(mlx-whisper)은 launchd 서비스로 등록됨 — 부팅 시 자동 실행 + KeepAlive.
+#   svc list / svc restart stt / svc logs stt   (레지스트리: ~/services/services.json, 포트 9797)
+#   첫 setup만 수동: cd stt-server && ./run.sh --setup   (venv + 의존성)
+#   수동 실행이 필요하면: cd stt-server && ./run.sh  (STT_PORT 로 포트 override)
 #   사전조건: brew install ffmpeg / python@3.12, Apple Silicon
 ```
 
@@ -109,8 +111,8 @@ LLM_BASE_URL=http://localhost:8001
 LLM_MODEL=gemma-4-26b-a4b-it-4bit
 LLM_API_KEY=<게이트웨이 키>
 
-# mlx-whisper 로컬 STT 연결 시 (stt-server 실행 필요)
+# mlx-whisper 로컬 STT 연결 시 (svc 관리, 포트 9797)
 STT_PROVIDER=local
-STT_BASE_URL=http://localhost:8000
+STT_BASE_URL=http://localhost:9797
 STT_MODEL=small            # 또는 turbo / 전체 HF repo id
 ```

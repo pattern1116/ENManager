@@ -207,11 +207,23 @@ export function parseStructure(text: string): ParseResult {
 
 // ── System prompt builder ─────────────────────────────────────────
 
-export function buildAnalysisPrompt(text: string, parseResult: ParseResult): string {
+export function buildAnalysisPrompt(
+  text: string,
+  parseResult: ParseResult,
+  targetPattern?: PatternType,
+): string {
+  // When the utterance answers a practice prompt we tell the model which
+  // structure the speaker was *aiming* for, so scoring/detection stays
+  // anchored to the practice goal instead of drifting.
+  const targetLine =
+    targetPattern && targetPattern !== 'UNKNOWN'
+      ? `\nThe speaker was practising the ${targetPattern} pattern — judge whether they actually used it.\n`
+      : ''
+
   return `You are a speaking coach that analyzes English speech structure.
 
 The user said: "${text}"
-
+${targetLine}
 Pre-analysis hints (may be wrong — override if needed):
 - Likely pattern: ${parseResult.patternDetected} (confidence: ${parseResult.confidence})
 - Signals found: ${parseResult.signals.join(', ') || 'none'}
@@ -224,6 +236,13 @@ Patterns to recognize:
 - CC:  Contrast Connector ("however", "although", "on the other hand")
 - HO:  Hedging ("I'd say", "maybe") + Opinion
 - UNKNOWN: doesn't fit any pattern
+
+Scoring rubric — score the STRUCTURE, not the topic or vocabulary. Apply it consistently:
+- 85-100: all components of the pattern are present, ordered, and clearly connected.
+- 65-84:  the pattern is recognisable but one component is weak or implicit.
+- 40-64:  a component is missing or the ordering is muddled.
+- 0-39:   no usable structure; rambling or a single bare claim.
+Be deterministic: the same utterance must always receive the same score.
 
 Respond ONLY with a JSON object — no markdown, no preamble:
 {

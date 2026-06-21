@@ -11,9 +11,9 @@
 // of inactivity, or an explicit endSession(), the next utterance opens a new one.
 // ─────────────────────────────────────────────────────────────────
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useRecorder } from './useRecorder'
-import type { AnalyzeResponse, RecordingState } from '@/types'
+import type { AnalyzeResponse, RecordingState, PatternType } from '@/types'
 
 const SESSION_STORE_KEY = 'coach.session'
 const SESSION_IDLE_MS = 30 * 60 * 1000 // 30 min of inactivity → new session
@@ -52,11 +52,11 @@ interface CoachSessionState {
 }
 
 interface UseCoachSessionReturn extends CoachSessionState {
-  startRecording: () => Promise<void>
+  startRecording: (targetPattern?: PatternType | null) => Promise<void>
   stopRecording: () => void
   reset: () => void                            // clear utterance state, keep session
   endSession: () => void                       // close session; next utterance opens a new one
-  submitText: (text: string) => Promise<void>  // for text-input fallback
+  submitText: (text: string, targetPattern?: PatternType | null) => Promise<void>  // text-input fallback
 }
 
 async function apiPost<T>(url: string, body: object): Promise<T> {
@@ -78,6 +78,11 @@ export function useCoachSession(): UseCoachSessionReturn {
   const [pipelineError, setPipelineError] = useState<string | null>(null)
   const [sessionId, setSessionId] = useState<number | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
+
+  // The target pattern captured at record-start time. The recorder invokes
+  // runAnalysis itself (with only the blob), so we stash the target in a ref
+  // rather than threading it through the recorder.
+  const targetPatternRef = useRef<PatternType | null>(null)
 
   // Restore an in-progress session after mount (avoids SSR/hydration mismatch).
   useEffect(() => {
@@ -112,6 +117,7 @@ export function useCoachSession(): UseCoachSessionReturn {
         const analyzeRes: AnalyzeResponse = await apiPost('/api/analyze', {
           text,
           sessionId: sessionId ?? undefined,
+          targetPattern: targetPatternRef.current ?? undefined,
         })
         setResult(analyzeRes)
         commitSession(analyzeRes.sessionId)
@@ -125,6 +131,15 @@ export function useCoachSession(): UseCoachSessionReturn {
   )
 
   const recorder = useRecorder(runAnalysis)
+
+  // Capture the practice target (if any) before recording starts.
+  const startRecording = useCallback(
+    (targetPattern?: PatternType | null) => {
+      targetPatternRef.current = targetPattern ?? null
+      return recorder.start()
+    },
+    [recorder],
+  )
 
   // Clear utterance-level state but keep the session open for the next utterance.
   const reset = useCallback(() => {
@@ -143,7 +158,7 @@ export function useCoachSession(): UseCoachSessionReturn {
   }, [reset])
 
   const submitText = useCallback(
-    async (text: string) => {
+    async (text: string, targetPattern?: PatternType | null) => {
       setIsProcessing(true)
       setPipelineError(null)
       setTranscript(text)
@@ -151,6 +166,7 @@ export function useCoachSession(): UseCoachSessionReturn {
         const analyzeRes: AnalyzeResponse = await apiPost('/api/analyze', {
           text,
           sessionId: sessionId ?? undefined,
+          targetPattern: targetPattern ?? undefined,
         })
         setResult(analyzeRes)
         commitSession(analyzeRes.sessionId)
@@ -177,7 +193,7 @@ export function useCoachSession(): UseCoachSessionReturn {
     result,
     error: recorder.error ?? pipelineError,
     sessionId,
-    startRecording: recorder.start,
+    startRecording,
     stopRecording: recorder.stop,
     reset,
     endSession,

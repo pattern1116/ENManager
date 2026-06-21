@@ -5,9 +5,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getLLMProvider } from '@/lib/providers/llm'
 import { parseStructure, buildAnalysisPrompt } from '@/lib/parsers/structure'
-import { buildFeedback } from '@/lib/feedback'
+import { buildFeedback, coercePattern } from '@/lib/feedback'
+import { evaluatePractice } from '@/lib/practiceResult'
 import { createSession, saveUtterance, getSession } from '@/lib/db'
 import type { AnalyzeRequest, AnalyzeResponse, UtteranceFeedback } from '@/types'
+
+// Low but non-zero temperature: keeps the same utterance scoring consistently
+// across calls without the degenerate, jittery output seen at temperature 0.
+const ANALYZE_TEMPERATURE = 0.2
 
 export async function POST(req: NextRequest) {
   try {
@@ -18,13 +23,22 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'text is required' }, { status: 400 })
     }
 
+    // A practice utterance carries the pattern the speaker was aiming for.
+    // coercePattern maps anything invalid → UNKNOWN, which we treat as "no target".
+    const target = body.targetPattern != null ? coercePattern(body.targetPattern) : 'UNKNOWN'
+    const hasTarget = target !== 'UNKNOWN'
+
     // 1. Rule-based pre-parse
     const parseResult = parseStructure(text)
 
     // 2. LLM analysis
     const llm = getLLMProvider()
-    const systemPrompt = buildAnalysisPrompt(text, parseResult)
-    const raw = await llm.complete([{ role: 'user', content: text }], systemPrompt)
+    const systemPrompt = buildAnalysisPrompt(text, parseResult, hasTarget ? target : undefined)
+    const raw = await llm.complete(
+      [{ role: 'user', content: text }],
+      systemPrompt,
+      { temperature: ANALYZE_TEMPERATURE },
+    )
 
     // 3. Parse + validate LLM response. buildFeedback coerces every field
     //    to a safe value (invalid pattern → UNKNOWN, score clamped to 0–100,
@@ -48,11 +62,16 @@ export async function POST(req: NextRequest) {
         : createSession().id
     const utterance = saveUtterance(sessionId, text, feedback)
 
+    // 5. Practice loop: when a target pattern was given, report whether the
+    //    speaker actually hit it.
+    const practiceResult = hasTarget ? evaluatePractice(target, feedback) : null
+
     const response: AnalyzeResponse = {
       utteranceId: utterance.id,
       sessionId,
       transcript: text,
       feedback,
+      practiceResult,
     }
 
     return NextResponse.json(response)

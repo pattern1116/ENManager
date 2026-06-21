@@ -112,4 +112,24 @@ describe('buildAnalysisPrompt', () => {
     // Asks for strict JSON output
     expect(prompt).toContain('"patternDetected"')
   })
+
+  it('includes the scoring rubric for consistent grading', () => {
+    const text = 'The cat sat on the mat.'
+    const prompt = buildAnalysisPrompt(text, parseStructure(text))
+    expect(prompt).toMatch(/rubric/i)
+    expect(prompt).toContain('85-100')
+    expect(prompt).toMatch(/deterministic/i)
+  })
+
+  it('injects the practice target pattern when given', () => {
+    const text = 'I prefer mornings because I focus.'
+    const prompt = buildAnalysisPrompt(text, parseStructure(text), 'CE')
+    expect(prompt).toContain('practising the CE pattern')
+  })
+
+  it('omits the target line for UNKNOWN or no target', () => {
+    const text = 'I prefer mornings because I focus.'
+    expect(buildAnalysisPrompt(text, parseStructure(text))).not.toMatch(/practising the/)
+    expect(buildAnalysisPrompt(text, parseStructure(text), 'UNKNOWN')).not.toMatch(/practising the/)
+  })
 })

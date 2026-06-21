@@ -5,7 +5,7 @@
 //   LLM_PROVIDER=claude | openai | ollama | lmstudio | openai-compat
 // ─────────────────────────────────────────────────────────────────
 
-import type { LLMProvider, Message } from '@/types'
+import type { LLMProvider, Message, CompletionOptions } from '@/types'
 
 // ── Claude (Anthropic) ────────────────────────────────────────────
 
@@ -19,7 +19,7 @@ class ClaudeProvider implements LLMProvider {
     this.model = process.env.LLM_MODEL ?? 'claude-3-5-haiku-20241022'
   }
 
-  async complete(messages: Message[], system: string): Promise<string> {
+  async complete(messages: Message[], system: string, opts?: CompletionOptions): Promise<string> {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -32,6 +32,7 @@ class ClaudeProvider implements LLMProvider {
         max_tokens: 1024,
         system,
         messages: messages.filter(m => m.role !== 'system'),
+        ...(opts?.temperature != null ? { temperature: opts.temperature } : {}),
       }),
     })
     if (!res.ok) throw new Error(`Claude API error: ${res.status} ${await res.text()}`)
@@ -52,7 +53,7 @@ class OpenAIProvider implements LLMProvider {
     this.model = process.env.LLM_MODEL ?? 'gpt-4o-mini'
   }
 
-  async complete(messages: Message[], system: string): Promise<string> {
+  async complete(messages: Message[], system: string, opts?: CompletionOptions): Promise<string> {
     const allMessages = [{ role: 'system' as const, content: system }, ...messages]
     const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -60,7 +61,12 @@ class OpenAIProvider implements LLMProvider {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${this.apiKey}`,
       },
-      body: JSON.stringify({ model: this.model, messages: allMessages, max_tokens: 1024 }),
+      body: JSON.stringify({
+        model: this.model,
+        messages: allMessages,
+        max_tokens: 1024,
+        ...(opts?.temperature != null ? { temperature: opts.temperature } : {}),
+      }),
     })
     if (!res.ok) throw new Error(`OpenAI API error: ${res.status} ${await res.text()}`)
     const data = await res.json()
@@ -83,12 +89,21 @@ class OpenAICompatProvider implements LLMProvider {
     this.apiKey = process.env.LLM_API_KEY ?? 'ollama'  // Ollama accepts any non-empty string
   }
 
-  async complete(messages: Message[], system: string): Promise<string> {
+  async complete(messages: Message[], system: string, opts?: CompletionOptions): Promise<string> {
     const allMessages = [{ role: 'system' as const, content: system }, ...messages]
     // Ollama uses /api/chat, LM Studio + vLLM use OpenAI-compatible /v1/chat/completions
     const endpoint = this.name === 'ollama'
       ? `${this.baseUrl}/api/chat`
       : `${this.baseUrl}/v1/chat/completions`
+
+    // Ollama nests sampling params under `options`; OpenAI-compat takes them top-level.
+    const temperature = opts?.temperature
+    const tempBody =
+      temperature == null
+        ? {}
+        : this.name === 'ollama'
+        ? { options: { temperature } }
+        : { temperature }
 
     const res = await fetch(endpoint, {
       method: 'POST',
@@ -96,7 +111,7 @@ class OpenAICompatProvider implements LLMProvider {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${this.apiKey}`,
       },
-      body: JSON.stringify({ model: this.model, messages: allMessages, stream: false }),
+      body: JSON.stringify({ model: this.model, messages: allMessages, stream: false, ...tempBody }),
     })
     if (!res.ok) throw new Error(`${this.name} error: ${res.status} ${await res.text()}`)
     const data = await res.json()
@@ -114,7 +129,7 @@ class OpenAICompatProvider implements LLMProvider {
 class MockLLMProvider implements LLMProvider {
   readonly name = 'mock'
 
-  async complete(_messages: Message[], _system: string): Promise<string> {
+  async complete(_messages: Message[], _system: string, _opts?: CompletionOptions): Promise<string> {
     // Returns a realistic-looking JSON feedback object for UI development
     await new Promise(r => setTimeout(r, 600))  // simulate latency
 
