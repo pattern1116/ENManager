@@ -28,6 +28,3 @@ export async function POST(req: NextRequest) {
     )
   }
 }
-
-// Required for Next.js to accept FormData with large audio blobs
-export const config = { api: { bodyParser: false } }

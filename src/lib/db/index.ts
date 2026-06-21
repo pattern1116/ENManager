@@ -45,19 +45,24 @@ CREATE INDEX IF NOT EXISTS idx_utterances_pattern ON utterances(pattern_used);
 `
 
 // ── Connection singleton ──────────────────────────────────────────
+//
+// Cache the handle on globalThis so Next's dev hot-reload (which
+// re-evaluates this module) reuses the existing connection instead of
+// opening a new one every reload and leaking the old ones.
 
-let _db: Database.Database | null = null
+const globalForDB = globalThis as unknown as { _scDb?: Database.Database }
 
 function getDB(): Database.Database {
-  if (_db) return _db
+  if (globalForDB._scDb) return globalForDB._scDb
 
   const dbPath = path.resolve(process.env.DB_PATH ?? './data/speaking-coach.db')
   const dir = path.dirname(dbPath)
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
 
-  _db = new Database(dbPath)
-  _db.exec(SCHEMA)
-  return _db
+  const db = new Database(dbPath)
+  db.exec(SCHEMA)
+  globalForDB._scDb = db
+  return db
 }
 
 // ── Sessions ──────────────────────────────────────────────────────
@@ -186,8 +191,12 @@ export function getProgressReport(): ProgressReport {
   // Trend: compare avg score of last 5 vs previous 5 per pattern
   const patternStats: PatternStats[] = patternRows.map(r => {
     const recent = db.prepare(`
-      SELECT AVG(score) AS avg FROM utterances
-      WHERE pattern_used = ? ORDER BY created_at DESC LIMIT 5
+      SELECT AVG(score) AS avg FROM (
+        SELECT score FROM utterances
+        WHERE pattern_used = ?
+        ORDER BY created_at DESC
+        LIMIT 5
+      )
     `).get(r.pattern_used) as any
     const older = db.prepare(`
       SELECT AVG(score) AS avg FROM (
@@ -318,7 +327,9 @@ export function getWeeklyReport(): WeeklyReportData {
   const lastWeek = weekSummary(db, db.prepare(`SELECT ${minus14}`).pluck().get() as string,
                                    db.prepare(`SELECT ${minus7}`).pluck().get() as string)
 
-  const scoreDelta = thisWeek.avgScore && lastWeek.avgScore
+  // Use utteranceCount (not avgScore truthiness) to decide whether a week
+  // has data — otherwise a genuine average of 0 is mistaken for "no data".
+  const scoreDelta = thisWeek.utteranceCount > 0 && lastWeek.utteranceCount > 0
     ? thisWeek.avgScore - lastWeek.avgScore
     : 0
 

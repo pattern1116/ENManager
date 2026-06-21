@@ -28,30 +28,30 @@ _최종 업데이트: 2026-06-20_
 
 ## 알려진 버그 (2026-06-20 코드 리뷰)
 
-심각도 순. 미수정 상태.
+**전부 수정 완료 (2026-06-20).** 테스트 우선(test-first)으로 처리 — `npm test`(Vitest 17개). 빌드/타입체크 통과.
 
-1. **[크래시] 잘못된 패턴 문자열이 FeedbackPanel을 죽임.**
-   LLM이 enum에 없는 값(예: `"PRE|SID"`)을 `patternDetected`로 반환하면 `PATTERN_META[pattern]`이 `undefined`가 되고, `PatternBadge`에서 `meta.color` 접근 시 런타임 크래시.
-   - 위치: `src/app/api/analyze/route.ts`(검증 없음), `src/components/coach/FeedbackPanel.tsx`(PatternBadge 방어 없음).
-   - 처방: analyze 라우트에서 LLM JSON 검증 — `patternDetected`를 유효 `PatternType`으로 coerce(아니면 `UNKNOWN`), `score` 0~100 클램프, `gapsFound` 배열 보장. FeedbackPanel도 `PATTERN_META[pattern] ?? UNKNOWN` 방어.
+1. ✅ **[크래시] 잘못된 패턴 문자열이 FeedbackPanel을 죽임.**
+   LLM enum 드리프트(예: `"PRE|SID"`) → `PATTERN_META[pattern]` undefined → `meta.color` 크래시.
+   - 수정: `src/lib/feedback.ts` 신설 — `buildFeedback`이 LLM JSON을 검증/coerce(`patternDetected`→유효 `PatternType` 아니면 `UNKNOWN`, `score` 0~100 클램프, `patternConfidence` coerce, `gapsFound` 배열 보장, 파싱 실패 시 규칙파서 fallback). `analyze/route.ts`가 이를 사용. `FeedbackPanel.tsx`의 `PatternBadge`도 `PATTERN_META[pattern] ?? UNKNOWN` 방어.
+   - 테스트: `tests/feedback.test.ts` (13개).
 
-2. **[분석 오류] 진행도 trend 쿼리 결함.**
-   `getProgressReport`의 "recent 5" 쿼리가 서브쿼리 없이 `SELECT AVG(score) ... ORDER BY ... LIMIT 5` → 집계가 단일 행으로 접혀서 `ORDER BY`/`LIMIT`이 무효, **전체 평균**을 계산함. "older 5"는 서브쿼리로 올바르게 처리됨. 결과적으로 improving/declining 판정이 틀림.
-   - 위치: `src/lib/db/index.ts:188`.
-   - 처방: recent도 older처럼 `AVG(score) FROM (SELECT score ... ORDER BY created_at DESC LIMIT 5)` 서브쿼리로 감싸기.
+2. ✅ **[분석 오류] 진행도 trend 쿼리 결함.**
+   `getProgressReport`의 "recent 5" 집계가 서브쿼리 없이 collapse → 전체 평균 계산.
+   - 수정: `src/lib/db/index.ts`의 recent 쿼리를 `AVG(score) FROM (SELECT score ... ORDER BY created_at DESC LIMIT 5)` 서브쿼리로 감쌈.
+   - 테스트: `tests/db.test.ts` (improving/declining 판정).
 
-3. **[깨진 스크립트] `npm run db:reset` 실행 불가.**
-   `package.json`은 `node scripts/reset-db.js`를 부르는데 파일이 없음.
-   - 처방: `scripts/reset-db.js` 생성(`lib/db`의 `resetDB` 또는 DELETE 실행) 또는 스크립트 제거.
+3. ✅ **[깨진 스크립트] `npm run db:reset` 실행 불가.**
+   - 수정: `scripts/reset-db.js` 생성(전체 DELETE + autoincrement 리셋). 더불어 init/reset 스크립트의 `.env.local` 로더가 실제 환경변수를 덮어쓰지 않도록 수정(테스트 가능 + 올바른 우선순위).
 
-4. **[데드코드] transcribe 라우트의 무효 config.**
-   `src/app/api/transcribe/route.ts`의 `export const config = { api: { bodyParser: false } }`는 Pages Router 문법이라 App Router에선 무시됨. 오해 소지 있어 제거 권장.
+4. ✅ **[데드코드] transcribe 라우트의 무효 config.**
+   - 수정: `transcribe/route.ts`에서 Pages Router용 `export const config` 제거.
 
-5. **[엣지] 0점을 "데이터 없음"으로 오인.**
-   `scoreDelta`/`recentImprovement`가 실제 avg `0`을 falsy로 취급해 "변화 없음" 처리. 모든 발화가 0점인 극단 케이스에서만 발생. 사소.
+5. ✅ **[엣지] 0점을 "데이터 없음"으로 오인.**
+   - 수정: `getWeeklyReport`의 `scoreDelta`가 `avgScore` truthiness 대신 `utteranceCount > 0`로 데이터 유무 판정. (`recentImprovement`는 이미 `!= null` 가드로 정상이었음 — 추가 수정 불필요.)
+   - 테스트: `tests/db.test.ts` (실제 0점 주간 delta).
 
-6. **[개발 한정] DB 커넥션 누수 가능성.**
-   `lib/db/index.ts`의 `_db` 모듈 싱글톤이 Next dev 핫리로드 때 재생성되며 커넥션이 누수될 수 있음. `globalThis`에 캐싱하면 해결. 프로덕션 영향 없음.
+6. ✅ **[개발 한정] DB 커넥션 누수 가능성.**
+   - 수정: `lib/db/index.ts`의 커넥션 싱글톤을 `globalThis._scDb`에 캐싱 → Next dev 핫리로드 시 재사용.
 
 ---
 

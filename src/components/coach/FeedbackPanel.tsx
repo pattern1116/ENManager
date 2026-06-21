@@ -35,7 +35,10 @@ const COLOR_MAP: Record<string, string> = {
 }
 
 function PatternBadge({ pattern }: { pattern: PatternType }) {
-  const meta = PATTERN_META[pattern]
+  // Defend against an unexpected pattern value slipping through
+  // (e.g. an LLM enum drift that bypassed coercion): fall back to
+  // the UNKNOWN meta instead of crashing on meta.color.
+  const meta = PATTERN_META[pattern] ?? PATTERN_META.UNKNOWN
   const color = COLOR_MAP[meta.color] ?? COLOR_MAP.gray
   return (
     <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-medium ${color}`}>

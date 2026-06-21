@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getLLMProvider } from '@/lib/providers/llm'
 import { parseStructure, buildAnalysisPrompt } from '@/lib/parsers/structure'
+import { buildFeedback } from '@/lib/feedback'
 import { createSession, saveUtterance, getSession } from '@/lib/db'
 import type { AnalyzeRequest, AnalyzeResponse, UtteranceFeedback } from '@/types'
 
@@ -25,22 +26,19 @@ export async function POST(req: NextRequest) {
     const systemPrompt = buildAnalysisPrompt(text, parseResult)
     const raw = await llm.complete([{ role: 'user', content: text }], systemPrompt)
 
-    // 3. Parse LLM response
-    let feedback: UtteranceFeedback
-    try {
-      const cleaned = raw.replace(/```json|```/g, '').trim()
-      feedback = JSON.parse(cleaned)
-    } catch {
-      // Fallback: use the pre-parse result with a generic rewrite
-      feedback = {
-        patternDetected: parseResult.patternDetected,
-        patternConfidence: parseResult.confidence,
-        gapsFound: parseResult.potentialGaps,
-        rewrite: text,
-        explanation: 'Could not parse LLM response. Raw output: ' + raw.slice(0, 200),
-        score: 50,
-      }
+    // 3. Parse + validate LLM response. buildFeedback coerces every field
+    //    to a safe value (invalid pattern → UNKNOWN, score clamped to 0–100,
+    //    gapsFound guaranteed to be an array) and falls back to the
+    //    rule-parser result when the output isn't valid JSON.
+    const fallback: UtteranceFeedback = {
+      patternDetected: parseResult.patternDetected,
+      patternConfidence: parseResult.confidence,
+      gapsFound: parseResult.potentialGaps,
+      rewrite: text,
+      explanation: 'Could not parse LLM response. Raw output: ' + raw.slice(0, 200),
+      score: 50,
     }
+    const feedback = buildFeedback(raw, fallback)
 
     // 4. Persist to DB. Reuse the client's session when it still exists,
     //    otherwise open a fresh one (guards against a stale localStorage id).
