@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { useState, useEffect, useCallback } from 'react'
 
 const NAV = [
   {
@@ -46,6 +47,19 @@ const NAV = [
 
 export default function Sidebar() {
   const pathname = usePathname()
+  const [userId, setUserId] = useState<string | null>(null)
+
+  useEffect(() => {
+    fetch('/api/auth/me')
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d?.userId) setUserId(d.userId) })
+      .catch(() => {})
+  }, [])
+
+  const logout = useCallback(async () => {
+    await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {})
+    window.location.assign('/login')
+  }, [])
 
   return (
     <aside className="w-14 flex-shrink-0 flex flex-col items-center py-4 gap-2 border-r border-line bg-bg-surface">
@@ -73,6 +87,27 @@ export default function Sidebar() {
           </Link>
         )
       })}
+
+      {/* User id + logout, pinned to the bottom */}
+      <div className="mt-auto flex flex-col items-center gap-2">
+        {userId && (
+          <span
+            title={`User ${userId}`}
+            className="font-mono text-[10px] text-muted tabular-nums"
+          >
+            {userId}
+          </span>
+        )}
+        <button
+          onClick={logout}
+          title="Log out"
+          className="w-9 h-9 rounded-lg flex items-center justify-center text-muted hover:text-red-400 hover:bg-bg-card transition-colors"
+        >
+          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+      </div>
     </aside>
   )
 }
