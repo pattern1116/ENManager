@@ -7,8 +7,10 @@
 //
 // Session semantics: one practice "sitting" = one session. The sessionId
 // is kept across utterances and persisted to localStorage so a reload (or
-// a trip to History and back) continues the same session. After SESSION_IDLE_MS
-// of inactivity, or an explicit endSession(), the next utterance opens a new one.
+// a trip to History and back) continues the same session. The idle timer is
+// measured from the last *utterance* (it's refreshed on analyze, not on page
+// load). After SESSION_IDLE_MS since that last utterance, or an explicit
+// endSession(), the next utterance opens a new one.
 // ─────────────────────────────────────────────────────────────────
 
 import { useState, useCallback, useEffect, useRef } from 'react'
@@ -16,7 +18,7 @@ import { useRecorder } from './useRecorder'
 import type { AnalyzeResponse, RecordingState, PatternType } from '@/types'
 
 const SESSION_STORE_KEY = 'coach.session'
-const SESSION_IDLE_MS = 30 * 60 * 1000 // 30 min of inactivity → new session
+const SESSION_IDLE_MS = 2 * 60 * 60 * 1000 // 2 h since last utterance → new session
 
 function loadStoredSession(): number | null {
   if (typeof window === 'undefined') return null
