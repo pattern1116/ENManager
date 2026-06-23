@@ -6,36 +6,72 @@
 
 export type PatternType = 'PRE' | 'SID' | 'CE' | 'CC' | 'HO' | 'UNKNOWN'
 
-export const PATTERN_META: Record<PatternType, { label: string; structure: string; color: string }> = {
+export const PATTERN_META: Record<PatternType, {
+  label: string         // the step sequence, e.g. "Signpost → Idea → Detail"
+  structure: string     // one-line summary
+  color: string
+  steps: string[]       // each step, with a short gloss
+  example: string       // a worked example sentence
+}> = {
   PRE: {
     label: 'Point → Reason → Example',
     structure: 'Make a point, back it with a reason, ground it with an example.',
     color: 'blue',
+    steps: [
+      'Point — state your claim up front',
+      'Reason — say why ("because…")',
+      'Example — make it concrete ("For example…")',
+    ],
+    example: 'Remote work suits me better. Because I focus best without interruptions. For example, I finished a whole report in one quiet morning.',
   },
   SID: {
     label: 'Signpost → Idea → Detail',
     structure: 'Signal your stance, state the idea, support with detail.',
     color: 'teal',
+    steps: [
+      'Signpost — flag what\'s coming ("Honestly," / "I think…")',
+      'Idea — state one clear idea',
+      'Detail — add a specific supporting detail',
+    ],
+    example: 'Honestly, I think meetings are overused. Most of what we cover could be a two-line message.',
   },
   CE: {
     label: 'Cause → Effect',
     structure: 'Name the cause, show the consequence.',
     color: 'amber',
+    steps: [
+      'Cause — name what happened',
+      'Effect — show the consequence ("…so…" / "…which means…")',
+    ],
+    example: 'Because I slept badly, I made careless decisions all afternoon.',
   },
   CC: {
     label: 'Contrast Connector',
     structure: 'State one view, contrast with another using a connector.',
     color: 'purple',
+    steps: [
+      'First view — state one side',
+      'Connector — pivot ("However," / "On the other hand,")',
+      'Second view — state the contrasting side',
+    ],
+    example: 'Startups move fast. However, big companies offer far more stability.',
   },
   HO: {
     label: 'Hedging + Opinion',
     structure: 'Soften your claim, then state your position clearly.',
     color: 'coral',
+    steps: [
+      'Hedge — soften first ("I\'d say…" / "In my view…")',
+      'Opinion — then commit to a clear position',
+    ],
+    example: 'I\'d say the biggest problem is unclear ownership — no one knows who decides.',
   },
   UNKNOWN: {
     label: 'No pattern detected',
     structure: 'The utterance does not match a known structural pattern.',
     color: 'gray',
+    steps: ['Pick one clear structure and follow it from start to finish.'],
+    example: '',
   },
 }
 

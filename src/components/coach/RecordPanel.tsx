@@ -27,34 +27,67 @@ function PracticeCard({
   targetPattern,
   timerSeconds,
   hint,
+  loading,
   onNext,
+  onSimplify,
   onDismiss,
 }: {
   topic: string
   targetPattern: string
   timerSeconds: number
   hint?: string
+  loading?: boolean
   onNext: () => void
+  onSimplify: () => void
   onDismiss: () => void
 }) {
   const meta = PATTERN_META[targetPattern as keyof typeof PATTERN_META]
+  const [showGuide, setShowGuide] = useState(false)
   return (
     <div className="w-full rounded-xl bg-bg-card border border-line p-5 fade-up flex flex-col gap-3">
       <div className="flex items-start justify-between gap-3">
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-2">
             <span className="text-[10px] text-muted uppercase tracking-wider">Today's prompt</span>
-            <span className="font-mono text-xs font-bold text-blue-400 bg-blue-950/40 border border-blue-800/40 px-2 py-0.5 rounded-full">
-              {targetPattern}
-            </span>
+            {/* Tap the badge to learn what this pattern is */}
+            <button
+              onClick={() => setShowGuide(v => !v)}
+              aria-expanded={showGuide}
+              title={`What is ${targetPattern}?`}
+              className="font-mono text-xs font-bold text-blue-400 bg-blue-950/40 border border-blue-800/40 px-2 py-0.5 rounded-full hover:bg-blue-950/70 transition-colors"
+            >
+              {targetPattern} {showGuide ? '▾' : 'ⓘ'}
+            </button>
             <span className="text-[10px] text-muted">{timerSeconds}s</span>
           </div>
           <p className="text-sm font-medium text-text-primary leading-snug">{topic}</p>
           {meta && (
-            <p className="text-xs text-muted">{meta.structure}</p>
+            <button
+              onClick={() => setShowGuide(v => !v)}
+              className="text-xs text-muted hover:text-text-primary text-left transition-colors"
+            >
+              {meta.structure} <span className="text-blue-400">{showGuide ? '' : `· What is ${targetPattern}?`}</span>
+            </button>
           )}
         </div>
       </div>
+
+      {/* Pattern guide — step breakdown + worked example */}
+      {showGuide && meta && (
+        <div className="text-xs bg-bg-hover/50 border border-line rounded-lg px-3 py-3 flex flex-col gap-2">
+          <p className="font-medium text-text-primary">{meta.label}</p>
+          <ol className="flex flex-col gap-1 list-decimal list-inside text-muted">
+            {meta.steps.map((step, i) => (
+              <li key={i}>{step}</li>
+            ))}
+          </ol>
+          {meta.example && (
+            <p className="text-text-primary/90 leading-relaxed border-l-2 border-blue-800/50 pl-3 italic">
+              {meta.example}
+            </p>
+          )}
+        </div>
+      )}
 
       {hint && (
         <p className="text-xs text-blue-300/80 bg-blue-950/20 border border-blue-900/30 rounded-lg px-3 py-2 leading-relaxed">
@@ -65,9 +98,19 @@ function PracticeCard({
       <div className="flex gap-2 pt-1">
         <button
           onClick={onNext}
-          className="text-xs text-muted hover:text-text-primary transition-colors"
+          disabled={loading}
+          className="text-xs text-muted hover:text-text-primary transition-colors disabled:opacity-50"
         >
-          Next topic →
+          {loading ? 'Thinking…' : 'Next topic →'}
+        </button>
+        <span className="text-muted text-xs">·</span>
+        <button
+          onClick={onSimplify}
+          disabled={loading}
+          title="Rewrite this topic to be more concrete"
+          className="text-xs text-muted hover:text-text-primary transition-colors disabled:opacity-50"
+        >
+          Make it concrete
         </button>
         <span className="text-muted text-xs">·</span>
         <button
@@ -126,7 +169,7 @@ export default function RecordPanel() {
     submitText,
   } = useCoach()
 
-  const { currentPrompt, next, dismiss } = usePracticePlan()
+  const { currentPrompt, next, simplify, dismiss, loading: planLoading } = usePracticePlan()
 
   const [textInput, setTextInput] = useState('')
   const [showTextInput, setShowTextInput] = useState(false)
@@ -160,9 +203,13 @@ export default function RecordPanel() {
   }, [textInput, submitText, currentPrompt])
 
   const handleNext = useCallback(() => {
+    // Capture what they just said before reset() clears it — it drives the
+    // LLM follow-up ("tail topic") for the next prompt.
+    const lastUtterance = transcript ?? undefined
+    const lastTopic = currentPrompt?.topic
     reset()
-    next()
-  }, [reset, next])
+    next({ lastUtterance, lastTopic })
+  }, [reset, next, transcript, currentPrompt])
 
   return (
     <div className="w-full max-w-lg flex flex-col items-center gap-8">
@@ -174,7 +221,9 @@ export default function RecordPanel() {
           targetPattern={currentPrompt.targetPattern}
           timerSeconds={currentPrompt.timerSeconds}
           hint={currentPrompt.hint}
+          loading={planLoading}
           onNext={next}
+          onSimplify={simplify}
           onDismiss={dismiss}
         />
       )}
@@ -260,9 +309,10 @@ export default function RecordPanel() {
           {currentPrompt && (
             <button
               onClick={handleNext}
-              className="px-6 py-2 rounded-lg border border-blue-800/50 bg-blue-950/30 text-sm text-blue-400 hover:bg-blue-950/50 transition-colors"
+              disabled={planLoading}
+              className="px-6 py-2 rounded-lg border border-blue-800/50 bg-blue-950/30 text-sm text-blue-400 hover:bg-blue-950/50 transition-colors disabled:opacity-50"
             >
-              Next prompt →
+              {planLoading ? 'Thinking of a follow-up…' : 'Next prompt →'}
             </button>
           )}
         </div>
