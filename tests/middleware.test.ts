@@ -1,8 +1,10 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { NextRequest } from 'next/server'
 import { middleware } from '@/middleware'
 
 const ORIG = { ...process.env }
+const PIN = '4242'
+beforeEach(() => { process.env.AUTH_CODES = PIN })
 afterEach(() => { process.env = { ...ORIG } })
 
 // Build a NextRequest. The proxied case sets x-forwarded-* the way a tunnel
@@ -18,7 +20,7 @@ function req(
   return new NextRequest(new URL(path, origin), { headers })
 }
 
-const AUTHED = 'coach_uid=0911'
+const AUTHED = `coach_uid=${PIN}`
 
 describe('middleware — auth gate', () => {
   it('redirects an unauthed page request to /login', () => {
@@ -31,12 +33,12 @@ describe('middleware — auth gate', () => {
     // Socket host is localhost, but the tunnel forwards the real host/proto.
     const res = middleware(req('/history', {
       headers: {
-        'x-forwarded-host': 'en-manager.matildabc.com',
+        'x-forwarded-host': 'coach.example.com',
         'x-forwarded-proto': 'https',
       },
     }))
     const loc = new URL(res.headers.get('location')!)
-    expect(loc.host).toBe('en-manager.matildabc.com')
+    expect(loc.host).toBe('coach.example.com')
     expect(loc.protocol).toBe('https:')
     expect(loc.pathname).toBe('/login')
   })
@@ -68,10 +70,10 @@ describe('middleware — auth gate', () => {
   it('redirects an authed user away from /login, keeping the external host', () => {
     const res = middleware(req('/login', {
       cookie: AUTHED,
-      headers: { 'x-forwarded-host': 'en-manager.matildabc.com', 'x-forwarded-proto': 'https' },
+      headers: { 'x-forwarded-host': 'coach.example.com', 'x-forwarded-proto': 'https' },
     }))
     const loc = new URL(res.headers.get('location')!)
-    expect(loc.host).toBe('en-manager.matildabc.com')
+    expect(loc.host).toBe('coach.example.com')
     expect(loc.pathname).toBe('/')
   })
 
@@ -82,7 +84,7 @@ describe('middleware — auth gate', () => {
   })
 
   it('treats a cookie with a non-allowlisted code as unauthed', () => {
-    const res = middleware(req('/history', { cookie: 'coach_uid=1234' }))
+    const res = middleware(req('/history', { cookie: 'coach_uid=9999' }))
     expect(res.status).toBe(307)
     expect(new URL(res.headers.get('location')!).pathname).toBe('/login')
   })

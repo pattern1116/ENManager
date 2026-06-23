@@ -193,7 +193,7 @@ src/
 풀스택 Next 앱이라(API 라우트 + SQLite + 로컬 모델 의존) **GitHub Pages 같은 정적 호스팅엔 올라가지 않는다.** 이 맥에서 직접 서빙한다:
 
 1. 별도 폴더에 빌드(`next build`)하고 `next start`를 **svc 서비스로 등록**(dev 서버와 `.next` 충돌 방지 위해 작업 폴더와 분리).
-2. **Cloudflare Tunnel**에 Public Hostname 추가 → `en-manager.matildabc.com` → `http://localhost:<포트>`.
+2. **Cloudflare Tunnel**에 Public Hostname 추가 → `<your-host>.example.com` → `http://localhost:<포트>`.
 3. **4자리 PIN 게이트**(`AUTH_CODES`)로 보호 — 미들웨어가 모든 페이지/`/api`를 쿠키 검증 뒤에 둔다. 안 그러면 누구나 이 맥의 로컬 모델(Gemma/STT)을 굴릴 수 있다. 더 강한 인증이 필요하면 Cloudflare Access를 앞단에 추가할 수 있다.
 
 > 앱이 페이지와 `/api`를 같은 오리진에서 서빙하므로 (이전 프로젝트의) cross-origin CORS/프리플라이트 이슈는 없다.

@@ -1,4 +1,4 @@
-// POST /api/auth/login  { code: "0911" }
+// POST /api/auth/login  { code: "1234" }
 // Validates the 4-digit code and, on success, stores it as the user id
 // in an httpOnly cookie.
 
