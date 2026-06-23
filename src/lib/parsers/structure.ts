@@ -7,6 +7,7 @@
 // ─────────────────────────────────────────────────────────────────
 
 import type { PatternType, StructureGap } from '@/types'
+import { PATTERN_META } from '@/types'
 
 // ── Keyword signals per pattern ───────────────────────────────────
 
@@ -214,16 +215,27 @@ export function buildAnalysisPrompt(
 ): string {
   // When the utterance answers a practice prompt we tell the model which
   // structure the speaker was *aiming* for, so scoring/detection stays
-  // anchored to the practice goal instead of drifting.
-  const targetLine =
-    targetPattern && targetPattern !== 'UNKNOWN'
-      ? `\nThe speaker was practising the ${targetPattern} pattern — judge whether they actually used it.\n`
-      : ''
+  // anchored to the practice goal instead of drifting — and so the rewrite
+  // is a model answer in THAT structure, not just a generic improvement.
+  const hasTarget = targetPattern != null && targetPattern !== 'UNKNOWN'
+  const targetLine = hasTarget
+    ? `\nThe speaker was practising the ${targetPattern} pattern (${PATTERN_META[targetPattern].label}). Judge whether they actually used it.\n`
+    : ''
+
+  // Steer the rewrite toward the right structure: the target pattern when
+  // practising, otherwise the pattern the rule-parser detected.
+  const rewritePattern = hasTarget ? targetPattern : parseResult.patternDetected
+  const rewriteDirective =
+    rewritePattern && rewritePattern !== 'UNKNOWN'
+      ? `Your "rewrite" MUST be a model answer that clearly demonstrates the ${rewritePattern} pattern (${PATTERN_META[rewritePattern].label}) — keep the speaker's own content and meaning, just restructure it so every component is present and well connected.`
+      : `Your "rewrite" should restructure the speaker's own content into one clear, recognisable pattern.`
 
   return `You are a speaking coach that analyzes English speech structure.
 
 The user said: "${text}"
 ${targetLine}
+${rewriteDirective}
+
 Pre-analysis hints (may be wrong — override if needed):
 - Likely pattern: ${parseResult.patternDetected} (confidence: ${parseResult.confidence})
 - Signals found: ${parseResult.signals.join(', ') || 'none'}

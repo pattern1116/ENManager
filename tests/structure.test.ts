@@ -132,4 +132,17 @@ describe('buildAnalysisPrompt', () => {
     expect(buildAnalysisPrompt(text, parseStructure(text))).not.toMatch(/practising the/)
     expect(buildAnalysisPrompt(text, parseStructure(text), 'UNKNOWN')).not.toMatch(/practising the/)
   })
+
+  it('directs the rewrite to follow the target pattern when practising', () => {
+    const text = 'I prefer mornings because I focus.'
+    const prompt = buildAnalysisPrompt(text, parseStructure(text), 'SID')
+    // The rewrite must be steered to the SID structure, not a generic improvement.
+    expect(prompt).toMatch(/rewrite[\s\S]*SID pattern/i)
+  })
+
+  it('steers the rewrite to the detected pattern in free practice (no target)', () => {
+    const text = 'I prefer mornings because I focus.' // rule-parser detects PRE
+    const prompt = buildAnalysisPrompt(text, parseStructure(text))
+    expect(prompt).toMatch(/rewrite[\s\S]*PRE pattern/i)
+  })
 })
