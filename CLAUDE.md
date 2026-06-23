@@ -21,7 +21,7 @@
 - **데이터 흐름**: 녹음 → `/api/transcribe`(STT) → `/api/analyze`(규칙 파서가 패턴/갭을 먼저 추정 → LLM 프롬프트에 힌트로 주입 → LLM이 최종 JSON 반환, 파싱 실패 시 규칙파서 결과로 fallback) → DB 저장 → FeedbackPanel 표시.
 - **DB**: **better-sqlite3 12.x** (동기 API, 단일 `.db` 파일, WAL 모드). `user_id` 없음 — 싱글 유저. 테이블 2개: `sessions`(1) ─ `utterances`(N), `ON DELETE CASCADE`. 진행도/주간 리포트는 별도 서버 없이 `lib/db/index.ts`의 SQL 집계로 계산. 스키마는 `lib/db/index.ts`의 `SCHEMA`와 `scripts/init-db.js` 두 곳에 정의(둘이 동일해야 함).
 - **provider 추상화**: LLM/STT 모두 인터페이스(`LLMProvider`/`STTProvider`) 뒤에 구현을 숨기고 `.env.local` 한 줄로 교체. mock 구현이 있어 모델 없이도 전체 UI 개발 가능.
-- **상태 공유**: `CoachProvider`(React Context)가 `useCoachSession` 하나를 RecordPanel/FeedbackPanel에 공유. sessionId는 localStorage에 영속화(30분 유휴 시 새 세션).
+- **상태 공유**: `CoachProvider`(React Context)가 `useCoachSession` 하나를 RecordPanel/FeedbackPanel에 공유. sessionId는 localStorage에 영속화(마지막 발화 기준 2시간 유휴 시 새 세션 — 타이머는 분석 시점에만 갱신, 페이지 로드로는 갱신 안 됨).
 
 ## 실행 방법
 ```bash
@@ -50,7 +50,8 @@ src/
 │   │   ├── transcribe/route.ts  ← POST /api/transcribe (STT)
 │   │   ├── sessions/route.ts    ← GET/POST /api/sessions
 │   │   ├── sessions/[id]/route.ts ← GET 세션 상세 + utterances
-│   │   ├── practice/route.ts    ← GET /api/practice (약점 기반 연습 문장)
+│   │   ├── practice/route.ts    ← GET /api/practice (5패턴 골고루 연습 덱)
+│   │   ├── practice/next/route.ts ← POST /api/practice/next (직전 답변 기반 LLM 꼬리주제, 실패 시 시드 fallback)
 │   │   ├── report/route.ts      ← GET /api/report (주간 리포트)
 │   │   └── health/route.ts      ← GET /api/health (provider 상태 확인)
 │   ├── history/page.tsx         ← 세션 목록 + 진행도 + 연습 카드 (구현 완료)
