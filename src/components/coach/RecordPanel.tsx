@@ -3,8 +3,9 @@
 import { useState, useCallback, useEffect } from 'react'
 import { useCoach } from '@/components/coach/CoachContext'
 import { usePracticePlan } from '@/hooks/usePracticePlan'
+import { Definable } from '@/components/coach/Definable'
 import { PATTERN_META } from '@/types'
-import type { RecordingState } from '@/types'
+import type { RecordingState, PracticePrompt } from '@/types'
 
 function formatDuration(ms: number): string {
   const s = Math.floor(ms / 1000)
@@ -60,7 +61,7 @@ function PracticeCard({
             </button>
             <span className="text-[10px] text-muted">{timerSeconds}s</span>
           </div>
-          <p className="text-sm font-medium text-text-primary leading-snug">{topic}</p>
+          <Definable as="p" className="text-sm font-medium text-text-primary leading-snug select-text">{topic}</Definable>
           {meta && (
             <button
               onClick={() => setShowGuide(v => !v)}
@@ -124,6 +125,84 @@ function PracticeCard({
   )
 }
 
+// ── Prompt picker modal ───────────────────────────────────────────
+// A quick "choose a prompt" sheet: one fresh topic per pattern so the learner
+// picks from a few varied options instead of scrolling a long list.
+
+function sampleOnePerPattern(deck: PracticePrompt[]): PracticePrompt[] {
+  const byPattern = new Map<string, PracticePrompt[]>()
+  for (const p of deck) {
+    const list = byPattern.get(p.targetPattern) ?? []
+    list.push(p)
+    byPattern.set(p.targetPattern, list)
+  }
+  return [...byPattern.values()].map(list => list[Math.floor(Math.random() * list.length)])
+}
+
+function PromptPickerModal({
+  deck,
+  onPick,
+  onClose,
+}: {
+  deck: PracticePrompt[]
+  onPick: (p: PracticePrompt) => void
+  onClose: () => void
+}) {
+  const [choices, setChoices] = useState<PracticePrompt[]>(() => sampleOnePerPattern(deck))
+
+  // Deck arrives async on first load — seed choices once it's there.
+  useEffect(() => {
+    if (deck.length > 0) setChoices(sampleOnePerPattern(deck))
+  }, [deck])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative w-full max-w-md rounded-2xl bg-bg-surface border border-line shadow-xl p-5 fade-up">
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-sm font-medium text-text-primary">Choose a prompt</p>
+          <button onClick={onClose} className="text-muted hover:text-text-primary text-sm" aria-label="Close">✕</button>
+        </div>
+
+        <div className="flex flex-col gap-2 max-h-[60vh] overflow-y-auto">
+          {choices.map((p, i) => {
+            const meta = PATTERN_META[p.targetPattern as keyof typeof PATTERN_META]
+            return (
+              <button
+                key={i}
+                onClick={() => onPick(p)}
+                className="text-left rounded-lg border border-line bg-bg-card p-3 hover:border-accent transition-colors flex flex-col gap-1"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-[10px] font-bold text-blue-400 bg-blue-950/40 border border-blue-800/40 px-1.5 py-0.5 rounded-full">
+                    {p.targetPattern}
+                  </span>
+                  {meta && <span className="text-[10px] text-muted">{meta.label}</span>}
+                  <span className="ml-auto text-[10px] text-muted">{p.timerSeconds}s</span>
+                </div>
+                <span className="text-sm text-text-primary leading-snug">{p.topic}</span>
+              </button>
+            )
+          })}
+        </div>
+
+        <button
+          onClick={() => setChoices(sampleOnePerPattern(deck))}
+          className="mt-3 w-full text-xs text-muted hover:text-text-primary border border-line rounded-lg py-2 transition-colors"
+        >
+          ↻ Show different prompts
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ── Countdown ring ────────────────────────────────────────────────
 
 function CountdownRing({ timeLeftS, totalS }: { timeLeftS: number; totalS: number }) {
@@ -169,10 +248,11 @@ export default function RecordPanel() {
     submitText,
   } = useCoach()
 
-  const { currentPrompt, next, simplify, dismiss, loading: planLoading } = usePracticePlan()
+  const { currentPrompt, deck, choosePrompt, next, simplify, dismiss, loading: planLoading } = usePracticePlan()
 
   const [textInput, setTextInput] = useState('')
   const [showTextInput, setShowTextInput] = useState(false)
+  const [showPicker, setShowPicker] = useState(false)
 
   const isRecording  = recordingState === 'recording'
   const isProcessing = recordingState === 'processing'
@@ -225,6 +305,25 @@ export default function RecordPanel() {
           onNext={next}
           onSimplify={simplify}
           onDismiss={dismiss}
+        />
+      )}
+
+      {/* Choose a prompt — quick picker so the learner can swap to a topic
+          they'd rather answer without scrolling a long list */}
+      {isIdle && !transcript && deck.length > 0 && (
+        <button
+          onClick={() => setShowPicker(true)}
+          className="text-xs text-muted hover:text-text-primary transition-colors underline underline-offset-2"
+        >
+          Choose a prompt
+        </button>
+      )}
+
+      {showPicker && (
+        <PromptPickerModal
+          deck={deck}
+          onPick={p => { choosePrompt(p); setShowPicker(false) }}
+          onClose={() => setShowPicker(false)}
         />
       )}
 
