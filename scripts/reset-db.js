@@ -34,10 +34,12 @@ const db = new Database(dbPath)
 db.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     TEXT    NOT NULL DEFAULT '',
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
   );
   CREATE TABLE IF NOT EXISTS utterances (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id            TEXT    NOT NULL DEFAULT '',
     session_id         INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     text               TEXT    NOT NULL,
     structure_detected TEXT    NOT NULL DEFAULT 'UNKNOWN',

@@ -16,6 +16,10 @@ vi.mock('@/lib/providers/llm', () => ({
   }),
 }))
 
+// The route resolves the user from the auth cookie (next/headers), absent in a
+// bare unit-test request — stand in with a fixed id.
+vi.mock('@/lib/currentUser', () => ({ currentUserId: () => '1234' }))
+
 import { POST } from '@/app/api/practice/next/route'
 import { resetDB } from '@/lib/db'
 
@@ -120,11 +124,16 @@ describe('POST /api/practice/next', () => {
       expect(data.source).toBe('seed')
     })
 
-    it('falls back to a seed when the LLM is the mock provider', async () => {
+    it('keeps the original prompt (never seeds a new one) when the LLM is the mock provider', async () => {
+      // Simplify must never swap the question out: with the mock provider we
+      // can't rewrite, so we hand back the SAME topic/pattern rather than
+      // seeding a brand-new prompt.
       fakeName = 'mock'
       const res = await post({ mode: 'simplify', topic: 'Something abstract', pattern: 'CC' })
       const data = await res.json()
-      expect(data.source).toBe('seed')
+      expect(data.source).toBe('simplify')
+      expect(data.prompt.topic).toBe('Something abstract')
+      expect(data.prompt.targetPattern).toBe('CC')
     })
   })
 })

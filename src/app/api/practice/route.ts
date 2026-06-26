@@ -6,10 +6,14 @@
 import { NextResponse } from 'next/server'
 import { getProgressReport } from '@/lib/db'
 import { generatePracticePrompts } from '@/lib/parsers/practice'
+import { currentUserId } from '@/lib/currentUser'
 
 export async function GET() {
   try {
-    const { patternStats } = getProgressReport()
+    const userId = currentUserId()
+    if (!userId) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+
+    const { patternStats } = getProgressReport(userId)
     const prompts = generatePracticePrompts(patternStats)
     return NextResponse.json({ prompts })
   } catch (err) {

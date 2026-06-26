@@ -1,7 +1,11 @@
 // ─────────────────────────────────────────────────────────────────
 // Database Layer (better-sqlite3)
 //
-// Single SQLite file at DB_PATH. No user_id — single user app.
+// Single SQLite file at DB_PATH, shared by all users. Every row carries a
+// `user_id` (the login code) and every query is scoped to one user, so each
+// account's sessions, utterances and analytics are fully isolated. The
+// caller (an API route) passes the authenticated user id in as the first
+// argument — there is no ambient "current user" at this layer.
 // ─────────────────────────────────────────────────────────────────
 
 import Database from 'better-sqlite3'
@@ -25,11 +29,13 @@ PRAGMA foreign_keys=ON;
 
 CREATE TABLE IF NOT EXISTS sessions (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     TEXT    NOT NULL DEFAULT '',
   created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS utterances (
   id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id            TEXT    NOT NULL DEFAULT '',
   session_id         INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   text               TEXT    NOT NULL,
   structure_detected TEXT    NOT NULL DEFAULT 'UNKNOWN',
@@ -40,9 +46,33 @@ CREATE TABLE IF NOT EXISTS utterances (
   created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_utterances_session ON utterances(session_id);
+CREATE INDEX IF NOT EXISTS idx_utterances_user ON utterances(user_id);
 CREATE INDEX IF NOT EXISTS idx_utterances_pattern ON utterances(pattern_used);
 `
+
+// Bring a database created before per-user isolation up to the current
+// schema: add the user_id columns if they're missing. Pre-existing rows keep
+// the '' default owner — login codes are 4 digits, so '' is unreachable and
+// that legacy data stays archived (never surfaced to a real account) rather
+// than leaking into the first user who logs in.
+function migrate(db: Database.Database): void {
+  const hasColumn = (table: string, col: string) =>
+    (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[])
+      .some(c => c.name === col)
+
+  if (!hasColumn('sessions', 'user_id')) {
+    db.exec(`ALTER TABLE sessions ADD COLUMN user_id TEXT NOT NULL DEFAULT ''`)
+  }
+  if (!hasColumn('utterances', 'user_id')) {
+    db.exec(`ALTER TABLE utterances ADD COLUMN user_id TEXT NOT NULL DEFAULT ''`)
+  }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_utterances_user ON utterances(user_id);
+  `)
+}
 
 // ── Connection singleton ──────────────────────────────────────────
 //
@@ -61,19 +91,20 @@ function getDB(): Database.Database {
 
   const db = new Database(dbPath)
   db.exec(SCHEMA)
+  migrate(db)
   globalForDB._scDb = db
   return db
 }
 
 // ── Sessions ──────────────────────────────────────────────────────
 
-export function createSession(): Session {
+export function createSession(userId: string): Session {
   const db = getDB()
-  const result = db.prepare('INSERT INTO sessions DEFAULT VALUES').run()
-  return getSession(result.lastInsertRowid as number)!
+  const result = db.prepare('INSERT INTO sessions (user_id) VALUES (?)').run(userId)
+  return getSession(userId, result.lastInsertRowid as number)!
 }
 
-export function getSession(id: number): Session | null {
+export function getSession(userId: string, id: number): Session | null {
   const db = getDB()
   const row = db.prepare(`
     SELECT s.id, s.created_at,
@@ -81,14 +112,14 @@ export function getSession(id: number): Session | null {
            AVG(u.score)     AS avg_score
     FROM   sessions s
     LEFT JOIN utterances u ON u.session_id = s.id
-    WHERE  s.id = ?
+    WHERE  s.id = ? AND s.user_id = ?
     GROUP  BY s.id
-  `).get(id) as any
+  `).get(id, userId) as any
   if (!row) return null
   return rowToSession(row)
 }
 
-export function listSessions(limit = 20): Session[] {
+export function listSessions(userId: string, limit = 20): Session[] {
   const db = getDB()
   const rows = db.prepare(`
     SELECT s.id, s.created_at,
@@ -96,10 +127,11 @@ export function listSessions(limit = 20): Session[] {
            AVG(u.score)  AS avg_score
     FROM   sessions s
     LEFT JOIN utterances u ON u.session_id = s.id
+    WHERE  s.user_id = ?
     GROUP  BY s.id
     ORDER  BY s.created_at DESC, s.id DESC
     LIMIT  ?
-  `).all(limit) as any[]
+  `).all(userId, limit) as any[]
   return rows.map(rowToSession)
 }
 
@@ -115,16 +147,25 @@ function rowToSession(row: any): Session {
 // ── Utterances ────────────────────────────────────────────────────
 
 export function saveUtterance(
+  userId: string,
   sessionId: number,
   text: string,
   feedback: UtteranceFeedback,
 ): Utterance {
   const db = getDB()
+  // Guard against writing into a session that isn't this user's — a stale or
+  // forged session id must never let one account append to another's history.
+  const owns = db.prepare(
+    'SELECT 1 FROM sessions WHERE id = ? AND user_id = ?'
+  ).get(sessionId, userId)
+  if (!owns) throw new Error(`session ${sessionId} not found for user`)
+
   const result = db.prepare(`
     INSERT INTO utterances
-      (session_id, text, structure_detected, gaps_found, rewrite_shown, pattern_used, score)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+      (user_id, session_id, text, structure_detected, gaps_found, rewrite_shown, pattern_used, score)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
+    userId,
     sessionId,
     text,
     feedback.patternDetected,
@@ -133,21 +174,21 @@ export function saveUtterance(
     feedback.patternDetected,
     feedback.score,
   )
-  return getUtterance(result.lastInsertRowid as number)!
+  return getUtterance(userId, result.lastInsertRowid as number)!
 }
 
-export function getUtterance(id: number): Utterance | null {
+export function getUtterance(userId: string, id: number): Utterance | null {
   const db = getDB()
-  const row = db.prepare('SELECT * FROM utterances WHERE id = ?').get(id) as any
+  const row = db.prepare('SELECT * FROM utterances WHERE id = ? AND user_id = ?').get(id, userId) as any
   if (!row) return null
   return rowToUtterance(row)
 }
 
-export function listUtterancesForSession(sessionId: number): Utterance[] {
+export function listUtterancesForSession(userId: string, sessionId: number): Utterance[] {
   const db = getDB()
   const rows = db.prepare(
-    'SELECT * FROM utterances WHERE session_id = ? ORDER BY created_at ASC'
-  ).all(sessionId) as any[]
+    'SELECT * FROM utterances WHERE session_id = ? AND user_id = ? ORDER BY created_at ASC'
+  ).all(sessionId, userId) as any[]
   return rows.map(rowToUtterance)
 }
 
@@ -167,7 +208,7 @@ function rowToUtterance(row: any): Utterance {
 
 // ── Progress & analytics ──────────────────────────────────────────
 
-export function getProgressReport(): ProgressReport {
+export function getProgressReport(userId: string): ProgressReport {
   const db = getDB()
 
   const totals = db.prepare(`
@@ -176,36 +217,37 @@ export function getProgressReport(): ProgressReport {
            AVG(u.score)         AS overall_avg
     FROM   sessions s
     LEFT JOIN utterances u ON u.session_id = s.id
-  `).get() as any
+    WHERE  s.user_id = ?
+  `).get(userId) as any
 
   const patternRows = db.prepare(`
     SELECT pattern_used,
            COUNT(*)   AS cnt,
            AVG(score) AS avg_score
     FROM   utterances
-    WHERE  pattern_used != 'UNKNOWN'
+    WHERE  user_id = ? AND pattern_used != 'UNKNOWN'
     GROUP  BY pattern_used
     ORDER  BY cnt DESC
-  `).all() as any[]
+  `).all(userId) as any[]
 
   // Trend: compare avg score of last 5 vs previous 5 per pattern
   const patternStats: PatternStats[] = patternRows.map(r => {
     const recent = db.prepare(`
       SELECT AVG(score) AS avg FROM (
         SELECT score FROM utterances
-        WHERE pattern_used = ?
+        WHERE user_id = ? AND pattern_used = ?
         ORDER BY created_at DESC
         LIMIT 5
       )
-    `).get(r.pattern_used) as any
+    `).get(userId, r.pattern_used) as any
     const older = db.prepare(`
       SELECT AVG(score) AS avg FROM (
         SELECT score FROM utterances
-        WHERE pattern_used = ?
+        WHERE user_id = ? AND pattern_used = ?
         ORDER BY created_at DESC
         LIMIT 5 OFFSET 5
       )
-    `).get(r.pattern_used) as any
+    `).get(userId, r.pattern_used) as any
 
     let trend: PatternStats['trend'] = 'stable'
     if (recent?.avg != null && older?.avg != null) {
@@ -227,11 +269,12 @@ export function getProgressReport(): ProgressReport {
   // "UNKNOWN · …" rows in the report.
   const gapRows = db.prepare(`
     SELECT pattern_used, gaps_found FROM utterances
-    WHERE gaps_found != '[]'
+    WHERE user_id = ?
+    AND   gaps_found != '[]'
     AND   pattern_used != 'UNKNOWN'
     ORDER BY created_at DESC
     LIMIT 100
-  `).all() as any[]
+  `).all(userId) as any[]
 
   const gapMap = new Map<string, WeakPoint>()
   for (const row of gapRows) {
@@ -257,13 +300,14 @@ export function getProgressReport(): ProgressReport {
   // 7-day improvement
   const recentAvg = db.prepare(`
     SELECT AVG(score) AS avg FROM utterances
-    WHERE created_at >= datetime('now', '-7 days')
-  `).get() as any
+    WHERE user_id = ? AND created_at >= datetime('now', '-7 days')
+  `).get(userId) as any
   const olderAvg = db.prepare(`
     SELECT AVG(score) AS avg FROM utterances
-    WHERE created_at < datetime('now', '-7 days')
+    WHERE user_id = ?
+    AND   created_at < datetime('now', '-7 days')
     AND   created_at >= datetime('now', '-14 days')
-  `).get() as any
+  `).get(userId) as any
 
   const recentImprovement =
     recentAvg?.avg != null && olderAvg?.avg != null
@@ -319,14 +363,14 @@ export interface WeeklyReportData {
   focusPattern: PatternType | null
 }
 
-function weekSummary(db: Database.Database, start: string, end: string): WeekSummary {
+function weekSummary(db: Database.Database, userId: string, start: string, end: string): WeekSummary {
   const row = db.prepare(`
     SELECT AVG(u.score) AS avg_score,
            COUNT(u.id)  AS utterance_count,
            COUNT(DISTINCT u.session_id) AS session_count
     FROM utterances u
-    WHERE u.created_at >= ? AND u.created_at < ?
-  `).get(start, end) as any
+    WHERE u.user_id = ? AND u.created_at >= ? AND u.created_at < ?
+  `).get(userId, start, end) as any
   return {
     avgScore:       row?.avg_score       != null ? Math.round(row.avg_score) : 0,
     utteranceCount: row?.utterance_count ?? 0,
@@ -334,17 +378,17 @@ function weekSummary(db: Database.Database, start: string, end: string): WeekSum
   }
 }
 
-export function getWeeklyReport(): WeeklyReportData {
+export function getWeeklyReport(userId: string): WeeklyReportData {
   const db = getDB()
 
   const now      = "datetime('now')"
   const minus7   = "datetime('now', '-7 days')"
   const minus14  = "datetime('now', '-14 days')"
 
-  const thisWeek = weekSummary(db, db.prepare(`SELECT ${minus7}`).pluck().get() as string,
-                                   db.prepare(`SELECT ${now}`).pluck().get() as string)
-  const lastWeek = weekSummary(db, db.prepare(`SELECT ${minus14}`).pluck().get() as string,
-                                   db.prepare(`SELECT ${minus7}`).pluck().get() as string)
+  const thisWeek = weekSummary(db, userId, db.prepare(`SELECT ${minus7}`).pluck().get() as string,
+                                           db.prepare(`SELECT ${now}`).pluck().get() as string)
+  const lastWeek = weekSummary(db, userId, db.prepare(`SELECT ${minus14}`).pluck().get() as string,
+                                           db.prepare(`SELECT ${minus7}`).pluck().get() as string)
 
   // Use utteranceCount (not avgScore truthiness) to decide whether a week
   // has data — otherwise a genuine average of 0 is mistaken for "no data".
@@ -357,10 +401,10 @@ export function getWeeklyReport(): WeeklyReportData {
            ROUND(AVG(score)) AS avg_score,
            COUNT(*) AS count
     FROM utterances
-    WHERE created_at >= datetime('now', '-14 days')
+    WHERE user_id = ? AND created_at >= datetime('now', '-14 days')
     GROUP BY date(created_at)
     ORDER BY date ASC
-  `).all() as any[]
+  `).all(userId) as any[]
 
   const dailyScores: DayScore[] = dailyRows.map(r => ({
     date:     r.date,
@@ -377,10 +421,10 @@ export function getWeeklyReport(): WeeklyReportData {
              ROUND(AVG(score)) AS avg_score,
              COUNT(*) AS count
       FROM utterances
-      WHERE created_at >= datetime('now', ?)
+      WHERE user_id = ? AND created_at >= datetime('now', ?)
       GROUP BY bucket
       ORDER BY bucket ASC
-    `).all(`-${sinceDays} days`) as any[])
+    `).all(userId, `-${sinceDays} days`) as any[])
       .map(r => ({ date: r.bucket as string, avgScore: r.avg_score ?? 0, count: r.count }))
 
   const trends: ScoreTrends = {
@@ -390,7 +434,7 @@ export function getWeeklyReport(): WeeklyReportData {
     monthly: bucketSeries(`strftime('%Y-%m-01', created_at)`, 365),
   }
 
-  const { patternStats, top3WeakPoints } = getProgressReport()
+  const { patternStats, top3WeakPoints } = getProgressReport(userId)
 
   // Focus = declining pattern first, then lowest-scoring, then null
   const declining = patternStats.find(p => p.trend === 'declining')
@@ -400,7 +444,15 @@ export function getWeeklyReport(): WeeklyReportData {
   return { thisWeek, lastWeek, scoreDelta, dailyScores, trends, patternStats, top3WeakPoints, focusPattern }
 }
 
-export function resetDB(): void {
+// Wipe data. With a userId, only that account's rows are removed (utterances
+// cascade from their sessions, but we delete both explicitly so an utterance
+// can't be orphaned). With no userId, the whole DB is cleared (test / admin).
+export function resetDB(userId?: string): void {
   const db = getDB()
-  db.exec('DELETE FROM utterances; DELETE FROM sessions;')
+  if (userId === undefined) {
+    db.exec('DELETE FROM utterances; DELETE FROM sessions;')
+    return
+  }
+  db.prepare('DELETE FROM utterances WHERE user_id = ?').run(userId)
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId)
 }

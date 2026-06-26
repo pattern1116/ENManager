@@ -8,6 +8,7 @@ import { parseStructure, buildAnalysisPrompt } from '@/lib/parsers/structure'
 import { buildFeedback, coercePattern } from '@/lib/feedback'
 import { evaluatePractice } from '@/lib/practiceResult'
 import { createSession, saveUtterance, getSession } from '@/lib/db'
+import { currentUserId } from '@/lib/currentUser'
 import type { AnalyzeRequest, AnalyzeResponse, UtteranceFeedback } from '@/types'
 
 // Low but non-zero temperature: keeps the same utterance scoring consistently
@@ -16,6 +17,9 @@ const ANALYZE_TEMPERATURE = 0.2
 
 export async function POST(req: NextRequest) {
   try {
+    const userId = currentUserId()
+    if (!userId) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+
     const body: AnalyzeRequest = await req.json()
     const { text, sessionId: existingSessionId } = body
 
@@ -54,13 +58,14 @@ export async function POST(req: NextRequest) {
     }
     const feedback = buildFeedback(raw, fallback)
 
-    // 4. Persist to DB. Reuse the client's session when it still exists,
-    //    otherwise open a fresh one (guards against a stale localStorage id).
+    // 4. Persist to DB. Reuse the client's session when it still exists AND
+    //    belongs to this user, otherwise open a fresh one (guards against a
+    //    stale localStorage id or one borrowed from another account).
     const sessionId =
-      existingSessionId != null && getSession(existingSessionId)
+      existingSessionId != null && getSession(userId, existingSessionId)
         ? existingSessionId
-        : createSession().id
-    const utterance = saveUtterance(sessionId, text, feedback)
+        : createSession(userId).id
+    const utterance = saveUtterance(userId, sessionId, text, feedback)
 
     // 5. Practice loop: when a target pattern was given, report whether the
     //    speaker actually hit it.

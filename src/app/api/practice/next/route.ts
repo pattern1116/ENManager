@@ -12,6 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getLLMProvider } from '@/lib/providers/llm'
 import { getProgressReport } from '@/lib/db'
+import { currentUserId } from '@/lib/currentUser'
 import { makePrompt, pickSeedPrompt } from '@/lib/parsers/practice'
 import { coercePattern } from '@/lib/feedback'
 import type { PatternType } from '@/types'
@@ -76,10 +77,13 @@ function extractJson(raw: string): { topic?: unknown; pattern?: unknown } | null
 
 export async function POST(req: NextRequest) {
   try {
+    const userId = currentUserId()
+    if (!userId) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+
     const body = await req.json().catch(() => ({}))
     const mode: string = body.mode === 'simplify' ? 'simplify' : 'followup'
 
-    const { patternStats } = getProgressReport()
+    const { patternStats } = getProgressReport(userId)
     const llm = getLLMProvider()
     const seed = () => NextResponse.json({ prompt: pickSeedPrompt(patternStats), source: 'seed' })
 
@@ -135,7 +139,8 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     console.error('[practice/next]', err)
     try {
-      const { patternStats } = getProgressReport()
+      const userId = currentUserId()
+      const { patternStats } = userId ? getProgressReport(userId) : { patternStats: [] }
       return NextResponse.json({ prompt: pickSeedPrompt(patternStats), source: 'seed' })
     } catch {
       return NextResponse.json({ error: 'Internal error' }, { status: 500 })

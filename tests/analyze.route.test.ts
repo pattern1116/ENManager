@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect, beforeAll, vi } from 'vitest'
 import os from 'os'
 import path from 'path'
 import fs from 'fs'
@@ -7,6 +7,10 @@ import fs from 'fs'
 // PRE-pattern JSON) BEFORE importing the route, since both read env lazily.
 process.env.DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sc-route-')), 'test.db')
 process.env.LLM_PROVIDER = 'mock'
+
+// Stand in for the authenticated user — the route reads it from the cookie via
+// next/headers, which isn't available in a bare unit-test request.
+vi.mock('@/lib/currentUser', () => ({ currentUserId: () => '1234' }))
 
 import { POST } from '@/app/api/analyze/route'
 import { resetDB } from '@/lib/db'

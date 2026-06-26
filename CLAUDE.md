@@ -19,7 +19,7 @@
 ```
 
 - **데이터 흐름**: 녹음 → `/api/transcribe`(STT) → `/api/analyze`(규칙 파서가 패턴/갭을 먼저 추정 → LLM 프롬프트에 힌트로 주입 → LLM이 최종 JSON 반환, 파싱 실패 시 규칙파서 결과로 fallback) → DB 저장 → FeedbackPanel 표시.
-- **DB**: **better-sqlite3 12.x** (동기 API, 단일 `.db` 파일, WAL 모드). `user_id` 없음 — 싱글 유저. 테이블 2개: `sessions`(1) ─ `utterances`(N), `ON DELETE CASCADE`. 진행도/주간 리포트는 별도 서버 없이 `lib/db/index.ts`의 SQL 집계로 계산. 스키마는 `lib/db/index.ts`의 `SCHEMA`와 `scripts/init-db.js` 두 곳에 정의(둘이 동일해야 함).
+- **DB**: **better-sqlite3 12.x** (동기 API, 단일 `.db` 파일, WAL 모드). **멀티 유저 — 모든 행에 `user_id`(로그인 코드), 모든 쿼리가 한 사용자로 스코프**되어 계정별 sessions/utterances/집계가 완전 분리됨. `lib/db`의 함수는 첫 인자로 `userId`를 받고, API 라우트가 `lib/currentUser.ts`의 `currentUserId()`(쿠키)로 그 값을 넘김. 기존 DB는 `getDB()`의 `migrate()`가 `user_id` 컬럼을 자동 추가(기존 행은 빈 `''` 소유자로 보관 — 4자리 코드와 절대 충돌 안 함). 테이블 2개: `sessions`(1) ─ `utterances`(N), `ON DELETE CASCADE`. 진행도/주간 리포트는 별도 서버 없이 `lib/db/index.ts`의 SQL 집계로 계산. 스키마는 `lib/db/index.ts`의 `SCHEMA`·`scripts/init-db.js`·`scripts/reset-db.js` 세 곳에 정의(셋이 동일해야 함).
 - **provider 추상화**: LLM/STT 모두 인터페이스(`LLMProvider`/`STTProvider`) 뒤에 구현을 숨기고 `.env.local` 한 줄로 교체. mock 구현이 있어 모델 없이도 전체 UI 개발 가능.
 - **상태 공유**: `CoachProvider`(React Context)가 `useCoachSession` 하나를 RecordPanel/FeedbackPanel에 공유. sessionId는 localStorage에 영속화(마지막 발화 기준 2시간 유휴 시 새 세션 — 타이머는 분석 시점에만 갱신, 페이지 로드로는 갱신 안 됨).
 
