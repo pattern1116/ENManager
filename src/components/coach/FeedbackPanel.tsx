@@ -7,6 +7,7 @@
 import { PATTERN_META } from '@/types'
 import type { UtteranceFeedback, PatternType } from '@/types'
 import { useCoach } from '@/components/coach/CoachContext'
+import { Definable } from '@/components/coach/Definable'
 
 // ── Placeholder data while no result ─────────────────────────────
 
@@ -156,9 +157,10 @@ export default function FeedbackPanel() {
         <section>
           <p className="text-xs text-muted uppercase tracking-wide mb-2">Suggested rewrite</p>
           <div className="rounded-lg bg-bg-card border border-line p-4">
-            <p className="text-sm text-text-primary leading-relaxed italic">
+            <Definable as="p" className="text-sm text-text-primary leading-relaxed italic select-text">
               "{feedback.rewrite}"
-            </p>
+            </Definable>
+            <p className="text-[10px] text-muted/70 mt-2">Double-click a word for its meaning</p>
           </div>
         </section>
       )}
