@@ -28,3 +28,6 @@ tsconfig.tsbuildinfo
 
 # Claude Code
 .claude/
+
+# Local-only runbook (machine-specific ports, service names, etc.)
+LOCAL.md
