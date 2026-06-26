@@ -8,16 +8,21 @@ import type { PatternType, PatternStats, WeakPoint } from '@/types'
 // ── Types (mirror WeeklyReportData from db) ───────────────────────
 
 interface DayScore  { date: string; avgScore: number; count: number }
+interface ScoreBucket { date: string; avgScore: number; count: number }
+interface ScoreTrends { daily: ScoreBucket[]; weekly: ScoreBucket[]; monthly: ScoreBucket[] }
 interface WeekSummary { avgScore: number; utteranceCount: number; sessionCount: number }
 interface ReportData {
   thisWeek: WeekSummary
   lastWeek: WeekSummary
   scoreDelta: number
   dailyScores: DayScore[]
+  trends: ScoreTrends
   patternStats: PatternStats[]
   top3WeakPoints: WeakPoint[]
   focusPattern: PatternType | null
 }
+
+type Granularity = 'daily' | 'weekly' | 'monthly'
 
 // ── Helpers ───────────────────────────────────────────────────────
 
@@ -44,66 +49,116 @@ function SummaryCard({ label, value, sub }: { label: string; value: string | num
   )
 }
 
-// ── Daily score bar chart ─────────────────────────────────────────
+// ── Score trend (line chart) ──────────────────────────────────────
+// Averaged into day / week / month buckets the user can toggle between.
 
-function ScoreChart({ days }: { days: DayScore[] }) {
-  if (days.length === 0) {
-    return (
-      <p className="text-xs text-muted text-center py-6">No data yet — start practicing.</p>
-    )
+function bandColor(score: number): string {
+  return score >= 75 ? '#22c55e' : score >= 50 ? '#eab308' : '#ef4444'
+}
+
+function bucketLabel(date: string, g: Granularity): string {
+  const d = new Date(date + 'T00:00:00')
+  if (g === 'monthly') return d.toLocaleDateString(undefined, { month: 'short', year: '2-digit' })
+  if (g === 'weekly')  return 'wk ' + d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+function bucketTooltip(date: string, b: ScoreBucket | null, g: Granularity): string {
+  const span = g === 'monthly' ? 'month' : g === 'weekly' ? 'week' : 'day'
+  if (!b) return `${bucketLabel(date, g)} · no practice this ${span}`
+  return `${bucketLabel(date, g)} · avg ${b.avgScore} · ${b.count}× (${span})`
+}
+
+// How many continuous buckets to show per granularity, so the axis spans a
+// fixed window (e.g. 14 days) with empty buckets shown as gaps — not just the
+// handful of buckets that happen to have data.
+const WINDOW: Record<Granularity, number> = { daily: 14, weekly: 8, monthly: 6 }
+
+const DAY_MS = 86_400_000
+const utcKey = (ms: number) => new Date(ms).toISOString().slice(0, 10)
+
+// Continuous bucket-start keys (UTC, matching the server's date() buckets).
+function buildSlots(g: Granularity): string[] {
+  const now = new Date()
+  const keys: string[] = []
+  const n = WINDOW[g]
+  if (g === 'monthly') {
+    for (let i = n - 1; i >= 0; i--) {
+      keys.push(utcKey(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1)))
+    }
+    return keys
+  }
+  const todayMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+  if (g === 'weekly') {
+    const sundayMs = todayMs - now.getUTCDay() * DAY_MS  // back to this week's Sunday
+    for (let i = n - 1; i >= 0; i--) keys.push(utcKey(sundayMs - i * 7 * DAY_MS))
+  } else {
+    for (let i = n - 1; i >= 0; i--) keys.push(utcKey(todayMs - i * DAY_MS))
+  }
+  return keys
+}
+
+function ScoreTrendChart({ buckets, granularity }: { buckets: ScoreBucket[]; granularity: Granularity }) {
+  const slots = buildSlots(granularity)
+  const byDate = new Map(buckets.map(b => [b.date, b]))
+  const points = slots.map(date => ({ date, b: byDate.get(date) ?? null }))
+  const n = points.length
+
+  if (buckets.length === 0) {
+    return <p className="text-xs text-muted text-center py-6">No data in this range yet — keep practicing.</p>
   }
 
-  // Fill all 14 calendar days so gaps show as empty
-  const today = new Date()
-  const slots: (DayScore | null)[] = Array.from({ length: 14 }, (_, i) => {
-    const d = new Date(today)
-    d.setDate(d.getDate() - (13 - i))
-    const key = d.toISOString().slice(0, 10)
-    return days.find(r => r.date === key) ?? null
-  })
+  const W = 600, H = 150
+  const padL = 26, padR = 10, padT = 12, padB = 20
+  const innerW = W - padL - padR
+  const innerH = H - padT - padB
 
-  const max = Math.max(...days.map(d => d.avgScore), 1)
+  const x = (i: number) => (n === 1 ? padL + innerW / 2 : padL + (i / (n - 1)) * innerW)
+  const y = (s: number) => padT + (1 - Math.max(0, Math.min(100, s)) / 100) * innerH
+
+  // Line connects only the buckets that have data (skipping empty days).
+  const linePath = points
+    .map((p, i) => (p.b ? `${x(i).toFixed(1)},${y(p.b.avgScore).toFixed(1)}` : null))
+    .filter(Boolean)
+    .join(' ')
+
+  // Show at most ~6 x-axis labels so they don't overlap.
+  const labelStep = Math.max(1, Math.ceil(n / 6))
 
   return (
-    <div className="flex items-end gap-1 h-28 w-full">
-      {slots.map((slot, i) => {
-        const isThisWeek = i >= 7
-        if (!slot) {
-          return (
-            <div key={i} className="flex-1 flex flex-col items-center justify-end gap-1">
-              <div className="w-full rounded-sm bg-bg-hover" style={{ height: '4px' }} />
-              {i === 0 || i === 7 ? (
-                <span className="text-[9px] text-muted rotate-0 whitespace-nowrap">
-                  {fmtDate((() => { const d = new Date(today); d.setDate(d.getDate() - (13 - i)); return d.toISOString().slice(0, 10) })())}
-                </span>
-              ) : <span className="text-[9px] text-transparent">·</span>}
-            </div>
-          )
-        }
-        const pct  = slot.avgScore / max
-        const h    = Math.max(8, Math.round(pct * 88))
-        const color = slot.avgScore >= 75 ? 'bg-green-500' : slot.avgScore >= 50 ? 'bg-yellow-500' : 'bg-red-500'
-        const opacity = isThisWeek ? 'opacity-100' : 'opacity-40'
-        return (
-          <div key={i} className="flex-1 flex flex-col items-center justify-end gap-1 group relative">
-            {/* Tooltip */}
-            <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 hidden group-hover:flex flex-col items-center z-10">
-              <div className="bg-bg-surface border border-line rounded px-2 py-1 text-[10px] whitespace-nowrap">
-                <span className="text-text-primary font-mono">{slot.avgScore}</span>
-                <span className="text-muted ml-1">({slot.count}×)</span>
-              </div>
-            </div>
-            <div
-              className={`w-full rounded-t-sm ${color} ${opacity} transition-all`}
-              style={{ height: `${h}px` }}
-            />
-            {i === 0 || i === 7 ? (
-              <span className="text-[9px] text-muted whitespace-nowrap">{fmtDate(slot.date)}</span>
-            ) : <span className="text-[9px] text-transparent">·</span>}
-          </div>
-        )
-      })}
-    </div>
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" preserveAspectRatio="none" style={{ height: 150 }}>
+      {/* Gridlines + y labels at 0/50/75/100 */}
+      {[0, 50, 75, 100].map(v => (
+        <g key={v}>
+          <line
+            x1={padL} x2={W - padR} y1={y(v)} y2={y(v)}
+            stroke="currentColor" className="text-line" strokeWidth={1}
+            strokeDasharray={v === 0 || v === 100 ? '0' : '3 3'}
+          />
+          <text x={padL - 6} y={y(v) + 3} textAnchor="end" fill="currentColor" className="text-text-secondary" fontSize={9}>{v}</text>
+        </g>
+      ))}
+
+      {/* Trend line through the days that have data */}
+      <polyline points={linePath} fill="none" stroke="#3b82f6" strokeWidth={1.5}
+        strokeLinejoin="round" strokeLinecap="round" />
+
+      {/* Points + x labels across the full window */}
+      {points.map((p, i) => (
+        <g key={i}>
+          {p.b && (
+            <circle cx={x(i)} cy={y(p.b.avgScore)} r={2.5} fill={bandColor(p.b.avgScore)}>
+              <title>{bucketTooltip(p.date, p.b, granularity)}</title>
+            </circle>
+          )}
+          {(i % labelStep === 0 || i === n - 1) && (
+            <text x={x(i)} y={H - 6} textAnchor="middle" fill="currentColor" className="text-muted" fontSize={8}>
+              {bucketLabel(p.date, granularity)}
+            </text>
+          )}
+        </g>
+      ))}
+    </svg>
   )
 }
 
@@ -129,37 +184,13 @@ function PatternHealthRow({ ps }: { ps: PatternStats }) {
   )
 }
 
-// ── Focus box ─────────────────────────────────────────────────────
-
-function FocusBox({ pattern, weakPoints }: { pattern: PatternType; weakPoints: WeakPoint[] }) {
-  const meta = PATTERN_META[pattern]
-  const gaps = weakPoints.filter(w => w.pattern === pattern)
-  return (
-    <div className="rounded-xl border border-blue-800/40 bg-blue-950/20 p-5 flex flex-col gap-2">
-      <div className="flex items-center gap-2">
-        <span className="text-[10px] text-blue-400 uppercase tracking-wider">Focus next week</span>
-        <span className="font-mono text-xs font-bold text-blue-300 bg-blue-950/60 border border-blue-800/40 px-2 py-0.5 rounded-full">
-          {pattern}
-        </span>
-      </div>
-      <p className="text-sm font-medium text-text-primary">{meta.label}</p>
-      <p className="text-xs text-muted leading-relaxed">{meta.structure}</p>
-      {gaps.length > 0 && (
-        <p className="text-xs text-amber-400/80 mt-1">
-          Recurring gap: <span className="font-medium capitalize">{gaps[0].gapComponent}</span>
-          {' '}({gaps[0].occurrences}× missed)
-        </p>
-      )}
-    </div>
-  )
-}
-
 // ── Page ──────────────────────────────────────────────────────────
 
 export default function ReportPage() {
   const [data, setData]       = useState<ReportData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState<string | null>(null)
+  const [granularity, setGranularity] = useState<Granularity>('daily')
 
   useEffect(() => {
     fetch('/api/report')
@@ -225,17 +256,28 @@ export default function ReportPage() {
                 />
               </div>
 
-              {/* Daily chart */}
+              {/* Score trend — day / week / month */}
               <section>
                 <div className="flex items-center justify-between mb-3">
-                  <p className="text-xs text-muted uppercase tracking-wide">Score trend — 14 days</p>
-                  <div className="flex items-center gap-3 text-[10px] text-muted">
-                    <span className="opacity-40">■ last week</span>
-                    <span>■ this week</span>
+                  <p className="text-xs text-muted uppercase tracking-wide">Score trend</p>
+                  <div className="flex items-center gap-1 text-[10px]">
+                    {([['daily', 'Day'], ['weekly', 'Week'], ['monthly', 'Month']] as const).map(([g, label]) => (
+                      <button
+                        key={g}
+                        onClick={() => setGranularity(g)}
+                        className={`px-2 py-0.5 rounded-full border transition-colors ${
+                          granularity === g
+                            ? 'border-blue-800/50 bg-blue-950/40 text-blue-300'
+                            : 'border-line text-muted hover:text-text-primary'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
                   </div>
                 </div>
                 <div className="rounded-xl bg-bg-card border border-line p-4">
-                  <ScoreChart days={data.dailyScores} />
+                  <ScoreTrendChart buckets={data.trends[granularity]} granularity={granularity} />
                 </div>
               </section>
 
@@ -263,11 +305,6 @@ export default function ReportPage() {
                     ))}
                   </div>
                 </section>
-              )}
-
-              {/* Focus recommendation */}
-              {data.focusPattern && (
-                <FocusBox pattern={data.focusPattern} weakPoints={data.top3WeakPoints} />
               )}
 
               {/* Empty state */}

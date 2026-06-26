@@ -2,8 +2,9 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import Sidebar from '@/components/layout/Sidebar'
+import { Definable } from '@/components/coach/Definable'
 import { PATTERN_META } from '@/types'
-import type { Session, Utterance, ProgressReport, PracticePrompt } from '@/types'
+import type { Session, Utterance, ProgressReport } from '@/types'
 
 // ── Helpers ───────────────────────────────────────────────────────
 
@@ -31,38 +32,6 @@ function StatCard({ label, value, sub }: { label: string; value: string | number
   )
 }
 
-// ── Practice card ─────────────────────────────────────────────────
-
-const DIFFICULTY_COLORS = {
-  beginner:     'text-green-400 border-green-800/40 bg-green-950/30',
-  intermediate: 'text-yellow-400 border-yellow-800/40 bg-yellow-950/30',
-  advanced:     'text-red-400 border-red-800/40 bg-red-950/30',
-}
-
-function PracticeCard({ prompt }: { prompt: PracticePrompt }) {
-  const meta = PATTERN_META[prompt.targetPattern]
-  const diffColor = DIFFICULTY_COLORS[prompt.difficulty]
-  return (
-    <div className="rounded-lg bg-bg-card border border-line p-4 flex flex-col gap-2">
-      <div className="flex items-center gap-2">
-        <span className="font-mono text-xs font-bold text-text-primary">{prompt.targetPattern}</span>
-        <span className="text-xs text-muted">·</span>
-        <span className="text-xs text-muted">{meta.label}</span>
-        <span className={`ml-auto text-[10px] font-medium px-2 py-0.5 rounded-full border ${diffColor}`}>
-          {prompt.difficulty}
-        </span>
-      </div>
-      <p className="text-sm text-text-primary">{prompt.topic}</p>
-      {prompt.hint && (
-        <p className="text-xs text-muted leading-relaxed border-t border-line pt-2">
-          Tip: {prompt.hint}
-        </p>
-      )}
-      <p className="text-[10px] text-muted">{prompt.timerSeconds}s</p>
-    </div>
-  )
-}
-
 // ── Utterance detail ──────────────────────────────────────────────
 
 function UtteranceRow({ u }: { u: Utterance }) {
@@ -80,7 +49,7 @@ function UtteranceRow({ u }: { u: Utterance }) {
       </div>
 
       {/* Original text */}
-      <p className="text-sm text-text-primary leading-relaxed">{u.text}</p>
+      <Definable as="p" className="text-sm text-text-primary leading-relaxed select-text">{u.text}</Definable>
 
       {/* Gaps */}
       {u.gapsFound.length > 0 && (
@@ -96,9 +65,9 @@ function UtteranceRow({ u }: { u: Utterance }) {
 
       {/* Rewrite */}
       {u.rewriteShown && (
-        <p className="text-xs text-muted italic border-l-2 border-line pl-3 leading-relaxed">
+        <Definable as="p" className="text-xs text-muted italic border-l-2 border-line pl-3 leading-relaxed select-text">
           "{u.rewriteShown}"
-        </p>
+        </Definable>
       )}
     </div>
   )
@@ -165,26 +134,17 @@ function SessionRow({ session }: { session: Session }) {
 export default function HistoryPage() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [progress, setProgress] = useState<ProgressReport | null>(null)
-  const [practice, setPractice] = useState<PracticePrompt[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     async function load() {
       try {
-        const [sessRes, pracRes] = await Promise.all([
-          fetch('/api/sessions'),
-          fetch('/api/practice'),
-        ])
+        const sessRes = await fetch('/api/sessions')
         if (!sessRes.ok) throw new Error('Failed to load sessions')
         const sessData = await sessRes.json()
         setSessions(sessData.sessions ?? [])
         setProgress(sessData.progress ?? null)
-
-        if (pracRes.ok) {
-          const pracData = await pracRes.json()
-          setPractice(pracData.prompts ?? [])
-        }
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Unknown error')
       } finally {
@@ -226,18 +186,6 @@ export default function HistoryPage() {
                 }
               />
             </div>
-
-            {/* Practice prompts */}
-            {!loading && practice.length > 0 && (
-              <section>
-                <p className="text-xs text-muted uppercase tracking-wide mb-3">
-                  Practice — based on your weak spots
-                </p>
-                <div className="flex flex-col gap-2">
-                  {practice.map((p, i) => <PracticeCard key={i} prompt={p} />)}
-                </div>
-              </section>
-            )}
 
             {/* Pattern breakdown */}
             {!loading && progress && progress.patternStats.length > 0 && (

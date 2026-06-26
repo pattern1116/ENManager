@@ -222,9 +222,13 @@ export function getProgressReport(): ProgressReport {
   })
 
   // Top 3 weak points: most frequent gaps
+  // Only count gaps tied to a recognised pattern — gaps on UNKNOWN utterances
+  // (no detectable structure) aren't actionable and show up as confusing
+  // "UNKNOWN · …" rows in the report.
   const gapRows = db.prepare(`
     SELECT pattern_used, gaps_found FROM utterances
     WHERE gaps_found != '[]'
+    AND   pattern_used != 'UNKNOWN'
     ORDER BY created_at DESC
     LIMIT 100
   `).all() as any[]
@@ -290,11 +294,26 @@ export interface WeekSummary {
   sessionCount: number
 }
 
+// One aggregated point on the score trend. `date` is the bucket's start date
+// (YYYY-MM-DD): the day itself, the week's start, or the month's first day.
+export interface ScoreBucket {
+  date: string
+  avgScore: number
+  count: number
+}
+
+export interface ScoreTrends {
+  daily: ScoreBucket[]    // last ~30 days
+  weekly: ScoreBucket[]   // last ~12 weeks (bucket = week start)
+  monthly: ScoreBucket[]  // last ~12 months (bucket = month start)
+}
+
 export interface WeeklyReportData {
   thisWeek: WeekSummary
   lastWeek: WeekSummary
   scoreDelta: number
   dailyScores: DayScore[]   // last 14 days, one row per day that has data
+  trends: ScoreTrends       // selectable day/week/month score trend
   patternStats: PatternStats[]
   top3WeakPoints: WeakPoint[]
   focusPattern: PatternType | null
@@ -349,6 +368,28 @@ export function getWeeklyReport(): WeeklyReportData {
     count:    r.count,
   }))
 
+  // Selectable score trend, bucketed by day / week / month. Each bucket keys
+  // off a start date so the client can format axis labels and the user can
+  // toggle granularity (a day view reacts fast; month view shows the long arc).
+  const bucketSeries = (bucketExpr: string, sinceDays: number): ScoreBucket[] =>
+    (db.prepare(`
+      SELECT ${bucketExpr} AS bucket,
+             ROUND(AVG(score)) AS avg_score,
+             COUNT(*) AS count
+      FROM utterances
+      WHERE created_at >= datetime('now', ?)
+      GROUP BY bucket
+      ORDER BY bucket ASC
+    `).all(`-${sinceDays} days`) as any[])
+      .map(r => ({ date: r.bucket as string, avgScore: r.avg_score ?? 0, count: r.count }))
+
+  const trends: ScoreTrends = {
+    // Week starts on Sunday: subtract the weekday index (0=Sun) in days.
+    daily:   bucketSeries(`date(created_at)`, 30),
+    weekly:  bucketSeries(`date(created_at, '-' || strftime('%w', created_at) || ' days')`, 84),
+    monthly: bucketSeries(`strftime('%Y-%m-01', created_at)`, 365),
+  }
+
   const { patternStats, top3WeakPoints } = getProgressReport()
 
   // Focus = declining pattern first, then lowest-scoring, then null
@@ -356,7 +397,7 @@ export function getWeeklyReport(): WeeklyReportData {
   const lowest    = [...patternStats].sort((a, b) => a.avgScore - b.avgScore)[0]
   const focusPattern: PatternType | null = declining?.pattern ?? lowest?.pattern ?? null
 
-  return { thisWeek, lastWeek, scoreDelta, dailyScores, patternStats, top3WeakPoints, focusPattern }
+  return { thisWeek, lastWeek, scoreDelta, dailyScores, trends, patternStats, top3WeakPoints, focusPattern }
 }
 
 export function resetDB(): void {
