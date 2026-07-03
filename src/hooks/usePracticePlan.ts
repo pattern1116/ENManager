@@ -59,34 +59,38 @@ export function usePracticePlan() {
   }, [deck])
 
   // Move on. With something the learner just said (and not too deep on the
-  // current thread), ask the LLM for a follow-up; otherwise pick a fresh seed.
+  // current thread), ask the LLM for a follow-up; otherwise ask the server
+  // for a fresh seed so difficulty/timer reflect the latest stats (the local
+  // `deck` is only snapshotted once at mount and goes stale within a session).
   const next = useCallback(async (ctx?: NextContext) => {
     setDismissed(false)
+    setLoading(true)
 
-    if (ctx?.lastUtterance && threadDepth < MAX_THREAD) {
-      setLoading(true)
-      // Drive the follow-up toward the next pattern in the rotation, then
-      // advance the cursor so the next prompt targets a different one.
-      const targetPattern = PATTERN_ROTATION[patternCursor % PATTERN_ROTATION.length]
-      setPatternCursor(c => c + 1)
-      try {
-        const res = await fetch('/api/practice/next', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ lastUtterance: ctx.lastUtterance, lastTopic: ctx.lastTopic, targetPattern }),
-        })
-        const d = await res.json()
-        if (d?.prompt?.topic) {
-          setCurrent(d.prompt)
-          // A server-side seed fallback resets the thread; a real follow-up deepens it.
-          setThreadDepth(t => (d.source === 'followup' ? t + 1 : 0))
-          return
-        }
-      } catch {
-        // fall through to a hardcoded seed
-      } finally {
-        setLoading(false)
+    const wantFollowup = !!ctx?.lastUtterance && threadDepth < MAX_THREAD
+    // Drive the follow-up toward the next pattern in the rotation, then
+    // advance the cursor so the next prompt targets a different one.
+    const targetPattern = wantFollowup ? PATTERN_ROTATION[patternCursor % PATTERN_ROTATION.length] : undefined
+    if (wantFollowup) setPatternCursor(c => c + 1)
+
+    try {
+      const res = await fetch('/api/practice/next', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(
+          wantFollowup ? { lastUtterance: ctx!.lastUtterance, lastTopic: ctx!.lastTopic, targetPattern } : {},
+        ),
+      })
+      const d = await res.json()
+      if (d?.prompt?.topic) {
+        setCurrent(d.prompt)
+        // A server-side seed fallback resets the thread; a real follow-up deepens it.
+        setThreadDepth(t => (d.source === 'followup' ? t + 1 : 0))
+        return
       }
+    } catch {
+      // network failure — fall back to the locally cached deck so practice never breaks
+    } finally {
+      setLoading(false)
     }
 
     nextSeed()
