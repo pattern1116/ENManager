@@ -57,6 +57,30 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_utterances_session ON utterances(session_id);
   CREATE INDEX IF NOT EXISTS idx_utterances_user ON utterances(user_id);
   CREATE INDEX IF NOT EXISTS idx_utterances_pattern ON utterances(pattern_used);
+
+  CREATE TABLE IF NOT EXISTS small_talk_sessions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     TEXT    NOT NULL DEFAULT '',
+    topic       TEXT    NOT NULL DEFAULT '',
+    status      TEXT    NOT NULL DEFAULT 'active',
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    ended_at    TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS small_talk_turns (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     TEXT    NOT NULL DEFAULT '',
+    session_id  INTEGER NOT NULL REFERENCES small_talk_sessions(id) ON DELETE CASCADE,
+    role        TEXT    NOT NULL,
+    text        TEXT    NOT NULL,
+    revised     TEXT,
+    idx         INTEGER NOT NULL,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_st_sessions_user ON small_talk_sessions(user_id);
+  CREATE INDEX IF NOT EXISTS idx_st_turns_session ON small_talk_turns(session_id);
+  CREATE INDEX IF NOT EXISTS idx_st_turns_user ON small_talk_turns(user_id);
 `)
 
 console.log(`✓ Database initialised: ${dbPath}`)

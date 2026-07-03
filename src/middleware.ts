@@ -13,7 +13,8 @@ function externalUrl(req: NextRequest, pathname: string) {
 }
 
 // Gate every page + API route behind the 4-digit PIN, except the auth
-// endpoints and the login page itself.
+// endpoints and the login page itself. Small Talk is reached at the
+// /small-talk path on the same host (no subdomain).
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl
 

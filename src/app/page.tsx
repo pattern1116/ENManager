@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import CoachLayout from '@/components/coach/CoachLayout'
 import Sidebar from '@/components/layout/Sidebar'
 
@@ -12,6 +13,14 @@ export default function Home() {
           <h1 className="text-sm font-medium text-muted tracking-wide uppercase">
             Speaking Coach
           </h1>
+
+          <Link
+            href="/small-talk"
+            className="ml-auto inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold text-white transition-transform hover:scale-[1.03]"
+            style={{ background: 'linear-gradient(135deg, #c8743c, #d99a5b)' }}
+          >
+            ☕️ Go to Small Talk
+          </Link>
         </header>
 
         <CoachLayout />

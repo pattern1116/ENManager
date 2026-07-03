@@ -209,3 +209,27 @@ export interface PracticePrompt {
   timerSeconds: number
   hint?: string
 }
+
+// ── Small Talk (listen + speak practice) ─────────────────────────
+
+export type SmallTalkRole = 'assistant' | 'user'
+
+export interface SmallTalkTurn {
+  id: number
+  sessionId: number
+  role: SmallTalkRole
+  text: string
+  // For user turns: a level-preserving rewrite, filled lazily on first request.
+  revised: string | null
+  idx: number
+  createdAt: string
+}
+
+export interface SmallTalkSession {
+  id: number
+  topic: string
+  status: 'active' | 'done'
+  createdAt: string
+  endedAt: string | null
+  turns: SmallTalkTurn[]
+}

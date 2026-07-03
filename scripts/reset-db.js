@@ -49,14 +49,32 @@ db.exec(`
     score              INTEGER NOT NULL DEFAULT 0,
     created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
   );
+  CREATE TABLE IF NOT EXISTS small_talk_sessions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     TEXT    NOT NULL DEFAULT '',
+    topic       TEXT    NOT NULL DEFAULT '',
+    status      TEXT    NOT NULL DEFAULT 'active',
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    ended_at    TEXT
+  );
+  CREATE TABLE IF NOT EXISTS small_talk_turns (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     TEXT    NOT NULL DEFAULT '',
+    session_id  INTEGER NOT NULL REFERENCES small_talk_sessions(id) ON DELETE CASCADE,
+    role        TEXT    NOT NULL,
+    text        TEXT    NOT NULL,
+    revised     TEXT,
+    idx         INTEGER NOT NULL,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
 `)
 
-db.exec('DELETE FROM utterances; DELETE FROM sessions;')
+db.exec('DELETE FROM utterances; DELETE FROM sessions; DELETE FROM small_talk_turns; DELETE FROM small_talk_sessions;')
 // Reset AUTOINCREMENT counters if the sqlite_sequence table exists.
 const hasSeq = db
   .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_sequence'`)
   .get()
-if (hasSeq) db.exec(`DELETE FROM sqlite_sequence WHERE name IN ('sessions','utterances')`)
+if (hasSeq) db.exec(`DELETE FROM sqlite_sequence WHERE name IN ('sessions','utterances','small_talk_sessions','small_talk_turns')`)
 
 console.log(`✓ Database reset: ${dbPath}`)
 db.close()

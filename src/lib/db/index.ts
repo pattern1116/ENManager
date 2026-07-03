@@ -19,6 +19,8 @@ import type {
   PatternStats,
   WeakPoint,
   ProgressReport,
+  SmallTalkSession,
+  SmallTalkTurn,
 } from '@/types'
 
 // ── Schema ────────────────────────────────────────────────────────
@@ -50,6 +52,33 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_utterances_session ON utterances(session_id);
 CREATE INDEX IF NOT EXISTS idx_utterances_user ON utterances(user_id);
 CREATE INDEX IF NOT EXISTS idx_utterances_pattern ON utterances(pattern_used);
+
+-- Small Talk: listening + speaking practice. Independent of the structured
+-- coaching tables above (no pattern scoring); one session = one ping-pong
+-- conversation, with N ordered turns (assistant + user). Per-user scoped.
+CREATE TABLE IF NOT EXISTS small_talk_sessions (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     TEXT    NOT NULL DEFAULT '',
+  topic       TEXT    NOT NULL DEFAULT '',
+  status      TEXT    NOT NULL DEFAULT 'active',   -- active | done
+  created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+  ended_at    TEXT
+);
+
+CREATE TABLE IF NOT EXISTS small_talk_turns (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     TEXT    NOT NULL DEFAULT '',
+  session_id  INTEGER NOT NULL REFERENCES small_talk_sessions(id) ON DELETE CASCADE,
+  role        TEXT    NOT NULL,                    -- assistant | user
+  text        TEXT    NOT NULL,
+  revised     TEXT,                                -- lazily filled for user turns
+  idx         INTEGER NOT NULL,                    -- 0-based order within session
+  created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_st_sessions_user ON small_talk_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_st_turns_session ON small_talk_turns(session_id);
+CREATE INDEX IF NOT EXISTS idx_st_turns_user ON small_talk_turns(user_id);
 `
 
 // Bring a database created before per-user isolation up to the current
@@ -450,9 +479,115 @@ export function getWeeklyReport(userId: string): WeeklyReportData {
 export function resetDB(userId?: string): void {
   const db = getDB()
   if (userId === undefined) {
-    db.exec('DELETE FROM utterances; DELETE FROM sessions;')
+    db.exec('DELETE FROM utterances; DELETE FROM sessions; DELETE FROM small_talk_turns; DELETE FROM small_talk_sessions;')
     return
   }
   db.prepare('DELETE FROM utterances WHERE user_id = ?').run(userId)
   db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId)
+  db.prepare('DELETE FROM small_talk_turns WHERE user_id = ?').run(userId)
+  db.prepare('DELETE FROM small_talk_sessions WHERE user_id = ?').run(userId)
+}
+
+// ── Small Talk ────────────────────────────────────────────────────
+//
+// A small-talk session is a single listen-and-speak conversation. Turns are
+// stored in arrival order (idx); assistant turns come from the LLM (and are
+// spoken via TTS), user turns from STT. `revised` on a user turn is filled
+// lazily the first time the learner taps their bubble in the review screen.
+
+function rowToStTurn(r: any): SmallTalkTurn {
+  return {
+    id: r.id,
+    sessionId: r.session_id,
+    role: r.role,
+    text: r.text,
+    revised: r.revised ?? null,
+    idx: r.idx,
+    createdAt: r.created_at,
+  }
+}
+
+export function createSmallTalkSession(userId: string, topic: string): SmallTalkSession {
+  const db = getDB()
+  const res = db
+    .prepare('INSERT INTO small_talk_sessions (user_id, topic) VALUES (?, ?)')
+    .run(userId, topic)
+  return getSmallTalkSession(userId, res.lastInsertRowid as number)!
+}
+
+export function getSmallTalkSession(userId: string, id: number): SmallTalkSession | null {
+  const db = getDB()
+  const row = db
+    .prepare('SELECT * FROM small_talk_sessions WHERE id = ? AND user_id = ?')
+    .get(id, userId) as any
+  if (!row) return null
+  const turns = (db
+    .prepare('SELECT * FROM small_talk_turns WHERE session_id = ? AND user_id = ? ORDER BY idx ASC')
+    .all(id, userId) as any[]).map(rowToStTurn)
+  return {
+    id: row.id,
+    topic: row.topic,
+    status: row.status,
+    createdAt: row.created_at,
+    endedAt: row.ended_at ?? null,
+    turns,
+  }
+}
+
+// Append a turn and return it. Caller guarantees the session belongs to the
+// user; we re-check defensively and compute the next idx server-side so two
+// concurrent appends can't collide on a client-supplied index.
+export function addSmallTalkTurn(
+  userId: string,
+  sessionId: number,
+  role: 'assistant' | 'user',
+  text: string,
+): SmallTalkTurn {
+  const db = getDB()
+  const owns = db
+    .prepare('SELECT 1 FROM small_talk_sessions WHERE id = ? AND user_id = ?')
+    .get(sessionId, userId)
+  if (!owns) throw new Error('small talk session not found')
+
+  const nextIdx = (db
+    .prepare('SELECT COALESCE(MAX(idx) + 1, 0) AS n FROM small_talk_turns WHERE session_id = ?')
+    .get(sessionId) as any).n as number
+
+  const res = db
+    .prepare('INSERT INTO small_talk_turns (user_id, session_id, role, text, idx) VALUES (?, ?, ?, ?, ?)')
+    .run(userId, sessionId, role, text, nextIdx)
+  return rowToStTurn(
+    db.prepare('SELECT * FROM small_talk_turns WHERE id = ?').get(res.lastInsertRowid as number),
+  )
+}
+
+export function getSmallTalkTurn(userId: string, turnId: number): SmallTalkTurn | null {
+  const db = getDB()
+  const row = db
+    .prepare('SELECT * FROM small_talk_turns WHERE id = ? AND user_id = ?')
+    .get(turnId, userId) as any
+  return row ? rowToStTurn(row) : null
+}
+
+export function setSmallTalkTurnRevised(userId: string, turnId: number, revised: string): void {
+  const db = getDB()
+  db.prepare('UPDATE small_talk_turns SET revised = ? WHERE id = ? AND user_id = ?')
+    .run(revised, turnId, userId)
+}
+
+export function endSmallTalkSession(userId: string, sessionId: number): void {
+  const db = getDB()
+  db.prepare(
+    "UPDATE small_talk_sessions SET status = 'done', ended_at = datetime('now') WHERE id = ? AND user_id = ?",
+  ).run(sessionId, userId)
+}
+
+export function listSmallTalkSessions(userId: string, limit = 20): SmallTalkSession[] {
+  const db = getDB()
+  const rows = db
+    .prepare(
+      'SELECT id FROM small_talk_sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT ?',
+    )
+    .all(userId, limit) as { id: number }[]
+  return rows.map(r => getSmallTalkSession(userId, r.id)!).filter(Boolean)
 }

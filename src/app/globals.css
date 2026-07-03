@@ -88,3 +88,40 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 .fade-up { animation: fade-up 0.3s ease-out; }
+
+/* ── Small Talk theme ──────────────────────────────────────────────
+   A warm, calm "café chat" palette. Scoped to .theme-smalltalk so the
+   existing utility classes (which read these CSS vars) re-theme for the
+   whole Small Talk subtree without touching the dark coach UI. */
+.theme-smalltalk {
+  --bg: #f4ece1;
+  --bg-surface: #fbf6ee;
+  --bg-card: #ffffff;
+  --bg-hover: #efe4d4;
+  --border: #e4d7c4;
+  --border-light: #efe6d8;
+
+  --text-primary: #3b3026;
+  --text-secondary: #8a7a66;
+  --text-muted: #b3a796;
+
+  --accent: #c8743c;
+  --accent-glow: rgba(200, 116, 60, 0.18);
+  --danger: #d9534f;
+  --success: #5a9e6f;
+
+  color: var(--text-primary);
+}
+
+/* Soft pulsing ring while the coach is speaking / mic is open. */
+@keyframes listen-glow {
+  0%, 100% { transform: scale(1); opacity: 0.55; }
+  50%      { transform: scale(1.12); opacity: 0.9; }
+}
+.listen-orb {
+  animation: listen-glow 2.4s ease-in-out infinite;
+}
+@keyframes speaking-bar {
+  0%, 100% { transform: scaleY(0.4); }
+  50%      { transform: scaleY(1); }
+}
