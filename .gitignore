@@ -8,6 +8,7 @@ __pycache__/
 
 # Next.js build output
 .next/
+.next-dev/
 out/
 
 # environment variables
