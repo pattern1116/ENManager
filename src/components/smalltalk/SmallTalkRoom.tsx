@@ -42,12 +42,12 @@ export default function SmallTalkRoom() {
   // Past conversations, shown on the idle screen so finished chats can be
   // reopened and reviewed later like a message history.
   const [history, setHistory] = useState<StSummary[]>([])
-  // Live caption of the learner's own speech while they record: the growing
-  // audio is re-transcribed every ~900ms (mlx-whisper is fast enough that
-  // repeating a batch transcription reads as streaming). Purely a live preview
-  // — the authoritative transcript still comes from the final blob on stop.
+  // Live caption of the learner's speech. TEMPORARILY DISABLED: the growing-
+  // audio re-transcription hammered the single-threaded STT server (its
+  // /transcribe blocks the event loop), which delayed the real transcription
+  // and the reply. Kept as '' so the caption block stays hidden; will be
+  // re-enabled with a design that doesn't contend with the final transcribe.
   const [liveText, setLiveText] = useState('')
-  const partialInFlightRef = useRef(false)
 
   const sessionIdRef = useRef<number | null>(null)
   // Sticky speaking pace for the coach. The learner can ask out loud to slow
@@ -142,28 +142,7 @@ export default function SmallTalkRoom() {
     [loadReview],
   )
 
-  // Re-transcribe the audio-so-far for a live caption. One request at a time
-  // (skip if the previous is still running) keeps results in order; late
-  // results arriving after the turn ends are dropped by the phase guard.
-  const handlePartial = useCallback(async (blob: Blob) => {
-    if (partialInFlightRef.current) return
-    partialInFlightRef.current = true
-    try {
-      const fd = new FormData()
-      fd.append('audio', blob, 'partial.webm')
-      const res = await fetch('/api/transcribe', { method: 'POST', body: fd })
-      const data = await res.json().catch(() => ({}))
-      if (res.ok && typeof data.transcript === 'string' && phaseRef.current === 'awaiting') {
-        setLiveText(data.transcript.trim())
-      }
-    } catch {
-      // Partial failures are silent — the final transcript is authoritative.
-    } finally {
-      partialInFlightRef.current = false
-    }
-  }, [])
-
-  const recorder = useRecorder(handleAudio, handlePartial)
+  const recorder = useRecorder(handleAudio)
   const recording = recorder.state === 'recording'
 
   // Keep refs in sync for the (window-level) key handler.
@@ -458,8 +437,8 @@ function LiveScreen({
         {label}
       </p>
 
-      {/* Live caption of the learner's own speech while recording */}
-      {recording && (
+      {/* Live caption of the learner's own speech while recording (disabled) */}
+      {recording && liveText && (
         <div className="w-full max-w-lg min-h-[3.5rem] mb-8 px-4 text-center">
           <p
             className="text-xl leading-relaxed"
