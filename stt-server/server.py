@@ -13,6 +13,7 @@
 # Requires ffmpeg on PATH (mlx-whisper uses it to decode webm).
 # ─────────────────────────────────────────────────────────────────
 
+import asyncio
 import os
 import time
 import tempfile
@@ -20,6 +21,7 @@ import tempfile
 import mlx_whisper
 from fastapi import FastAPI, Form, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 
 # Friendly size name → mlx-community HF repo.
 # Override per-request by passing a full repo id (contains "/") as `model`,
@@ -35,6 +37,13 @@ MODEL_REPOS = {
 }
 
 DEFAULT_REPO = os.environ.get("STT_MLX_REPO", "mlx-community/whisper-small-mlx")
+
+# mlx_whisper.transcribe() is blocking and GPU-bound. Running it directly inside
+# an async handler stalls the uvicorn event loop, so a burst of partial-transcript
+# requests starves the final one. Instead we offload each decode to a worker
+# thread and gate it with a semaphore of 1: the loop stays free to accept and
+# queue requests, while only one decode touches the GPU at a time.
+_decode_lock = asyncio.Semaphore(1)
 
 
 def resolve_repo(model: str) -> str:
@@ -78,11 +87,13 @@ async def transcribe(
             tmp_path = tmp.name
 
         t0 = time.time()
-        result = mlx_whisper.transcribe(
-            tmp_path,
-            path_or_hf_repo=repo,
-            language=language or None,
-        )
+        async with _decode_lock:
+            result = await run_in_threadpool(
+                mlx_whisper.transcribe,
+                tmp_path,
+                path_or_hf_repo=repo,
+                language=language or None,
+            )
         duration_ms = int((time.time() - t0) * 1000)
 
         return {
