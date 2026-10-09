@@ -48,11 +48,6 @@ CREATE TABLE IF NOT EXISTS utterances (
   created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
-CREATE INDEX IF NOT EXISTS idx_utterances_session ON utterances(session_id);
-CREATE INDEX IF NOT EXISTS idx_utterances_user ON utterances(user_id);
-CREATE INDEX IF NOT EXISTS idx_utterances_pattern ON utterances(pattern_used);
-
 -- Small Talk: listening + speaking practice. Independent of the structured
 -- coaching tables above (no pattern scoring); one session = one ping-pong
 -- conversation, with N ordered turns (assistant + user). Per-user scoped.
@@ -75,7 +70,17 @@ CREATE TABLE IF NOT EXISTS small_talk_turns (
   idx         INTEGER NOT NULL,                    -- 0-based order within session
   created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
+`
 
+// Indexes live apart from SCHEMA and are applied only after migrate(): several
+// of them are on `user_id`, which an old (pre-isolation) database does not have
+// yet, so creating them before the migration would fail on exactly the files
+// the migration exists to adopt.
+const INDEXES = `
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_utterances_session ON utterances(session_id);
+CREATE INDEX IF NOT EXISTS idx_utterances_user ON utterances(user_id);
+CREATE INDEX IF NOT EXISTS idx_utterances_pattern ON utterances(pattern_used);
 CREATE INDEX IF NOT EXISTS idx_st_sessions_user ON small_talk_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_st_turns_session ON small_talk_turns(session_id);
 CREATE INDEX IF NOT EXISTS idx_st_turns_user ON small_talk_turns(user_id);
@@ -97,10 +102,6 @@ function migrate(db: Database.Database): void {
   if (!hasColumn('utterances', 'user_id')) {
     db.exec(`ALTER TABLE utterances ADD COLUMN user_id TEXT NOT NULL DEFAULT ''`)
   }
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
-    CREATE INDEX IF NOT EXISTS idx_utterances_user ON utterances(user_id);
-  `)
 }
 
 // ── Connection singleton ──────────────────────────────────────────
@@ -121,6 +122,7 @@ function getDB(): Database.Database {
   const db = new Database(dbPath)
   db.exec(SCHEMA)
   migrate(db)
+  db.exec(INDEXES)
   globalForDB._scDb = db
   return db
 }
