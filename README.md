@@ -97,7 +97,14 @@ The same check paid off on TTS. Kokoro ran faster on CPU (4.10s) than on MPS (6.
 
 ### Working around an upstream bug
 
-The LLM gateway (oMLX) leaked Gemma's EOS token into tool-call responses, upstream issue #1087. Rather than wait for a fix or patch the gateway, I put a small proxy in front of it that strips the token. That proxy lives with the gateway, not in this repo.
+The local gateway serving Gemma (oMLX) leaks special tokens such as `<eos>` and `<end_of_turn>` into the `content` of chat completions, tracked upstream as issue #1087. Patching the gateway or waiting for a release both looked worse than routing around it, so I wrote a transparent reverse proxy: about 110 lines of FastAPI and httpx that forwards every method, path, header and query untouched and strips the tokens on the way back out. It handles the streaming case too, rewriting each SSE `delta.content` chunk as it passes and recomputing `content-length` rather than letting a stale header through.
+
+Worth being precise about the scope, because it is the kind of thing a reader would reasonably assume: I built that proxy for a different client on its own port, and **this app is not behind it.** The speaking coach points `LLM_BASE_URL` straight at oMLX, which means the two paths through this codebase handle a leaked token differently, and I checked rather than assumed:
+
+- The small-talk routes tolerate it. `extractJsonObject()` brace-scans for the outermost `{...}`, so a trailing `<end_of_turn>` is simply ignored and the reply parses normally.
+- The analyze path does not. `buildFeedback()` only strips code fences before `JSON.parse`, so a trailing token fails the parse and the response falls back to the rule parser. The user still gets feedback, but the model's scoring and rewrite are lost for that utterance.
+
+So the validation layer makes a leaked token fail safe rather than fail loudly, which is not the same as being immune to it. Putting this app behind the proxy, or giving `buildFeedback()` the same brace scan, would close that gap. The proxy lives outside this repo.
 
 ### Security
 
