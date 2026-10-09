@@ -1,192 +1,156 @@
 # AI Speaking Coach
 
-영어로 말할 때 **문장 구조를 자동으로 정리하는 능력**을 키워주는 로컬 AI 코치 앱.
+A self-hosted AI coach that trains you to structure what you say in English. You speak, a local STT model transcribes it, and a rule-based parser plus a local LLM tell you which structure you used, what was missing, and how to say it more clearly.
 
-녹음하면 STT가 받아쓰고, 규칙 파서 + LLM이 발화의 구조 패턴·빈틈·점수를 분석해 즉시 피드백한다.
-약점 기반 연습 문장을 반복하면서 PRE / SID / CE / CC / HO 패턴을 **무의식적으로** 쓰게 만드는 것이 목표.
+Everything runs on one Mac: the Next.js app, a Whisper STT server, a TTS server, and a quantized Gemma LLM. No third-party API is required.
 
-> 싱글 유저 로컬 앱 — 모든 게 한 머신에서 돈다. 외부 서버·계정 없이 맥에서 완결.
-
----
-
-## 핵심 패턴
-
-| 코드 | 구조 | 설명 |
-|------|------|------|
-| **PRE** | Point → Reason → Example | 주장하고, 이유를 대고, 예시로 받친다 |
-| **SID** | Signpost → Idea → Detail | 입장을 신호하고, 생각을 말하고, 디테일로 뒷받침 |
-| **CE**  | Cause → Effect | 원인을 짚고, 결과를 보인다 |
-| **CC**  | Contrast Connector | 한 관점을 말하고 연결어로 대비시킨다 |
-| **HO**  | Hedging + Opinion | 완곡하게 누그러뜨린 뒤 입장을 분명히 한다 |
+**Stack:** Next.js 14 (App Router) · TypeScript · FastAPI · mlx-whisper · Kokoro TTS · Gemma 4 26B (4-bit, OpenAI-compatible gateway) · SQLite (better-sqlite3) · Vitest (120+ tests)
 
 ---
 
-## 주요 기능
+## Why I built it
 
-- **녹음 → 전사 → 분석 파이프라인**: 마이크 녹음(webm/opus) 또는 텍스트 입력 → STT → 구조 분석 → 피드백.
-- **구조 피드백**: 감지된 패턴 배지, 0–100 명료도 점수, 빠진 요소(gap), 개선 리라이트 + 이유.
-- **연습 루프**: 5패턴을 골고루 도는 덱으로 주제를 제시(카운트다운 타이머). 그 주제로 말하면 **목표 패턴 적중 여부(✓/✗)** 를 피드백에 표시. 직전 답변을 받아 **LLM이 꼬리주제를 이어주고**, 주제가 너무 추상적이면 **simplify**로 구체적인 버전으로 바꿔준다.
-- **진행도 / 히스토리**: 세션·발화 기록, 패턴별 평균·추세(improving/declining), 상위 약점 3개.
-- **주간 리포트**: 점수 추이, 일자별 그래프, 패턴별 통계, 이번 주 집중(focus) 패턴.
-- **Provider 추상화**: LLM·STT 모두 인터페이스 뒤에 숨기고 `.env.local` 한 줄로 교체. **mock 모드**로 모델 없이도 전체 UI/파이프라인 개발 가능.
+I wanted to practice speaking English with instant, specific feedback, and I wanted to learn what actually hurts when you serve LLM, STT, and TTS models yourself instead of calling a hosted API. Most of the interesting engineering here came from the second goal.
 
 ---
 
-## 아키텍처
+## Architecture
 
 ```
-[브라우저]                  Next.js API (App Router)        로컬 모델
-  RecordPanel  ──녹음──▶  /api/transcribe ─▶ stt.ts ─────▶ mlx-whisper  :9797
-  FeedbackPanel          /api/analyze    ─▶ 규칙파서+LLM ─▶ Gemma 등     :8001
-  CoachContext           /api/sessions   ─▶ better-sqlite3 ─▶ data/speaking-coach.db
-                         /api/practice·report ─▶ DB 집계 쿼리
+Browser                         Next.js API routes                  Local model servers
+───────                         ──────────────────                  ───────────────────
+RecordPanel  ── audio ──▶  /api/transcribe ──▶ STT provider ───▶  mlx-whisper   (FastAPI :9797)
+FeedbackPanel             /api/analyze    ──▶ rule parser
+                                              + LLM provider ───▶  Gemma 4 26B   (OpenAI-compatible :8001)
+SmallTalkRoom             /api/small-talk ──▶ STT → LLM → TTS ──▶  Kokoro TTS    (FastAPI, streamed WAV)
+History / Report          /api/sessions, /api/report ──▶ SQLite (WAL), per-user scoped queries
 ```
 
-- **데이터 흐름**: 녹음 → `/api/transcribe`(STT) → `/api/analyze`(규칙 파서가 패턴/갭을 먼저 추정 → LLM 프롬프트에 힌트로 주입 → LLM이 최종 JSON 반환, 파싱 실패 시 규칙 파서 결과로 fallback) → DB 저장 → 화면 표시.
-- **DB**: better-sqlite3(동기 API, 단일 `.db` 파일, WAL). 테이블 2개 `sessions`(1) ─ `utterances`(N), `ON DELETE CASCADE`. 진행도/리포트는 별도 서버 없이 SQL 집계로 계산.
-- **세션 의미**: "한 번의 연습 묶음 = 한 세션". sessionId는 localStorage에 영속화되며 마지막 발화 기준 2시간 유휴 시 새 세션이 열린다(타이머는 분석 시점에만 갱신 — 페이지 새로고침으론 안 끊김).
+### The analyze pipeline
 
-자세한 구조·규칙은 [CLAUDE.md](./CLAUDE.md), 진행 상황·다음 작업은 [PLAN.md](./PLAN.md) 참고.
+1. The rule-based parser makes a first guess at the structure pattern and the missing pieces.
+2. That guess is injected into the LLM prompt as a hint.
+3. The LLM returns JSON feedback. Every field is validated and coerced.
+4. **If the LLM output does not parse, the rule-parser result is used instead**, so the user always gets feedback.
+5. The result is stored in SQLite and shown in the UI.
 
 ---
 
-## 빠른 시작 (mock 모드 — 모델 없이)
+## Features
+
+- **Structure feedback** on five patterns: Point–Reason–Example, Signpost–Idea–Detail, Cause–Effect, Contrast Connector, Hedging + Opinion. Each answer gets detected patterns, a 0–100 clarity score, missing elements, and a suggested rewrite with reasoning.
+- **Practice loop:** a round-robin deck across all five patterns with a countdown timer, a hit/miss check on the target pattern, LLM-generated follow-up topics, and a "simplify" option for abstract topics.
+- **Small talk mode:** a voice-only conversation. Record → STT → LLM reply → TTS, one turn at a time.
+- **Progress and weekly reports:** per-pattern averages and trends, top three weaknesses, daily/weekly/monthly charts, all computed with SQL aggregates.
+- **Provider abstraction:** LLM and STT sit behind interfaces. Switch between mock, local Gemma, Ollama, Claude, or OpenAI with one line in `.env.local`. **Mock mode** runs the whole pipeline without any model.
+
+---
+
+## Engineering notes
+
+### Designing for unreliable model output
+A 26B local model does not always follow instructions, so the app never trusts it alone:
+- Invalid or partial JSON falls back to the rule-parser result.
+- Small talk has a **hard server-side cap on user turns** (`MAX_USER_TURNS = 10`) instead of relying on the model to decide when the conversation is over. Goodbye detection is a regex with unit tests, including negative lookaheads so phrases like "go over my notes" are not mistaken for "goodbye".
+- Practice patterns kept drifting toward the same two or three, so the **client picks the target pattern round-robin** instead of the LLM.
+- The "simplify" feature drifted off topic, so I lowered the temperature, rewrote the prompts per pattern, and keep the original topic if the rewrite fails.
+
+### Measuring before optimizing
+I benchmarked STT engines before deciding whether to build a streaming STT server:
+
+| Batch STT (base model, 19s clip, warm) | Time |
+|---|---|
+| mlx-whisper | **0.235s** |
+| whisper.cpp (Metal) | 0.267s |
+| faster-whisper (CPU, int8) | 0.838s |
+
+| Streaming STT (emit latency) | Latency |
+|---|---|
+| SimulWhisper (AlignAtt + MLX) | **885ms** |
+| LocalAgreement + MLX | 1591ms |
+| LocalAgreement + faster-whisper | 1858ms |
+
+**STT was not the bottleneck.** A conversation turn was dominated by the LLM response and TTS. So instead of adding a heavy streaming server (torch, WebSockets), live captions use periodic re-transcription.
+
+The same habit applied to TTS: the 82M Kokoro model ran **faster on CPU (4.10s) than on the GPU (6.10s)** because transfer overhead outweighed the speedup, so it runs on CPU.
+
+### Incident: STT event-loop starvation
+- **Symptom:** after a deploy, small talk stopped transcribing, or transcribed but never replied.
+- **Cause:** `/transcribe` was an `async def` that called the blocking `mlx_whisper.transcribe()` directly, so each decode held uvicorn's single event loop for 0.3–0.5s. A new live-caption feature sent a partial-transcription request every ~900ms, so 10–15 requests piled up per turn and the final transcription starved behind them.
+- **Response:** rolled the feature back and rebuilt cleanly. Decoding now runs in a worker thread (`run_in_threadpool`) behind a semaphore that keeps one decode on the GPU at a time, so the event loop stays responsive.
+
+### Working around upstream bugs
+- The LLM gateway leaked Gemma's EOS token into tool-call responses (upstream issue #1087). I added a small client-side proxy that strips it.
+- Tracked down why three mlx-lm releases failed to run Gemma 4 (a missing module, a thread-local GPU stream crash, and a parameter mismatch) before settling on the gateway setup.
+
+### Security
+The app is exposed through a Cloudflare Tunnel, so it is locked down even though it is a personal tool:
+- **Cloudflare Access** in front, plus a **PIN gate** in middleware for every page and `/api` route. Codes live only in env vars, never in the repo.
+- **Per-user data isolation:** every row has a `user_id` and every query is scoped to it. The column was added with a non-destructive migration (`ALTER` + migrate on startup), and cross-user access is covered by tests.
+- **Server-to-server auth:** calls to the TTS server carry a short-lived **HMAC token** minted server-side, so the secret never reaches the browser.
+- The companion news app adds **Turnstile → HMAC session tokens**, per-IP **rate limiting** (verified to return 429 from the 11th request in a burst test), and an **SSRF allowlist** on article fetching.
+
+---
+
+## Quick start (mock mode, no models needed)
 
 ```bash
-npm install                  # better-sqlite3 네이티브 빌드 (Node 26 = C++20 필요)
-cp .env.example .env.local   # 기본값이 mock 이라 그대로 두면 모델 없이 동작
-npm run db:init              # SQLite 스키마 생성
-npm run dev                  # → http://localhost:5555
+npm install
+cp .env.example .env.local   # defaults to mock providers
+npm run db:init
+npm run dev                  # http://localhost:5555
 ```
 
-`.env.example` 기본값(`LLM_PROVIDER=mock`, `STT_PROVIDER=mock`)이면:
-- **MockLLM** — 가짜 피드백 JSON을 600ms 후 반환
-- **MockSTT** — 샘플 문장을 반환
+## Connecting real models
 
-UI·레이아웃·파이프라인 점검은 모델 없이 전부 가능하다.
-
----
-
-## 실모델 연결
-
-`.env.local`을 아래처럼 설정한다.
-
-### 1) STT — mlx-whisper (Apple Silicon)
-
-`stt-server/`의 FastAPI 서버가 mlx-whisper를 감싼다.
-
+**STT (mlx-whisper, Apple Silicon)**
 ```bash
-# 최초 1회 셋업 (venv + 의존성). ffmpeg / python@3.12 필요.
 brew install ffmpeg python@3.12
-cd stt-server && ./run.sh --setup
-
-# 이후 실행
-cd stt-server && ./run.sh   # STT_PORT 환경변수로 포트 override 가능
+cd stt-server && ./run.sh --setup   # first time only
+cd stt-server && ./run.sh
 ```
-
 ```env
 STT_PROVIDER=local
 STT_BASE_URL=http://localhost:9797
-STT_MODEL=small                      # 또는 turbo / 전체 HF repo id
+STT_MODEL=small
 ```
 
-### 2) LLM — 로컬 Gemma (OpenAI 호환 게이트웨이)
-
+**LLM (local Gemma via OpenAI-compatible gateway)**
 ```env
 LLM_PROVIDER=openai-compat
 LLM_BASE_URL=http://localhost:8001
 LLM_MODEL=gemma-4-26b-a4b-it-4bit
-LLM_API_KEY=<게이트웨이 키>
+LLM_API_KEY=<gateway key>
 ```
 
-### 다른 LLM provider
-
-```env
-# Ollama
-LLM_PROVIDER=ollama
-LLM_BASE_URL=http://localhost:11434
-LLM_MODEL=llama3.2
-
-# Claude API
-LLM_PROVIDER=claude
-LLM_API_KEY=sk-ant-...
-LLM_MODEL=claude-3-5-haiku-20241022
-
-# OpenAI API
-LLM_PROVIDER=openai
-LLM_API_KEY=sk-...
-LLM_MODEL=gpt-4o-mini
-```
-
-provider 상태는 앱 실행 후 `GET /api/health` 또는 Settings 페이지에서 확인.
+Ollama, Claude, and OpenAI are also supported through `LLM_PROVIDER`. Check provider status at `GET /api/health` or on the Settings page.
 
 ---
 
-## 사용법
-
-1. 메인 화면(`/`)에서 마이크 버튼을 눌러 말하거나, "Type instead"로 문장을 입력.
-2. 분석이 끝나면 오른쪽에 **패턴 · 점수 · 빠진 요소 · 리라이트**가 뜬다.
-3. 상단의 **연습 카드**(Today's prompt)에 뜬 주제로 말하면, 목표 패턴을 맞췄는지 ✓/✗ 로 보여준다. "Next topic"으로 다음 문장, "Free practice"로 자유 연습.
-4. 발화는 같은 세션에 묶인다. "New session"으로 세션을 끊을 수 있다(마지막 발화 기준 2시간 유휴 시 자동으로 새 세션).
-5. **History**(`/history`)에서 누적 기록·진행도·연습 카드, **Report**(`/report`)에서 주간 리포트를 본다.
-
----
-
-## 스크립트
+## Tests
 
 ```bash
-npm run dev        # 개발 서버 (http://localhost:5555)
-npm run build      # 프로덕션 빌드
-npm start          # 프로덕션 서버 (빌드 후)
-npm run lint       # ESLint
-npm run db:init    # DB 스키마 생성
-npm run db:reset   # 전체 데이터 삭제 + autoincrement 리셋
-npm test           # Vitest 1회 실행 (현재 114개)
-npm run test:watch # Vitest watch
+npm test
 ```
 
-테스트는 순수 로직(feedback 검증/coerce, 규칙 파서, 연습 생성·결과, provider 팩토리, DB 집계/추세/주간) + `/api/analyze` 라우트 통합을 커버한다.
+120+ Vitest tests cover feedback validation and coercion, the rule parser, practice generation and scoring, provider selection, DB aggregates and trends, the DB migration, auth and middleware, and the `/api/analyze` route end to end.
 
 ---
 
-## 프로젝트 구조
+## Project layout
 
 ```
-stt-server/                    ← mlx-whisper STT 서버 (FastAPI, Python)
+stt-server/                 FastAPI wrapper around mlx-whisper
 src/
-├── app/
-│   ├── api/                   ← analyze · transcribe · sessions · practice · report · health
-│   ├── page.tsx               ← 메인 (RecordPanel + FeedbackPanel)
-│   ├── history/ · report/ · settings/
-├── components/coach/          ← CoachContext · RecordPanel · FeedbackPanel
-├── hooks/                     ← useRecorder · useCoachSession · usePracticePlan
+├── app/api/                analyze · transcribe · small-talk · tts · sessions · practice · report · auth · health
+├── components/             coach UI and small-talk room
+├── hooks/                  recorder, session, practice plan
 ├── lib/
-│   ├── providers/             ← llm.ts · stt.ts (provider 추상화 + mock)
-│   ├── db/index.ts            ← SQLite CRUD + 진행도/주간 집계
-│   ├── parsers/               ← structure.ts(규칙 분석) · practice.ts(연습 생성)
-│   ├── feedback.ts            ← LLM 출력 검증/coerce
-│   └── practiceResult.ts      ← 연습 목표 적중 판정
-└── types/index.ts             ← 전체 도메인 타입
+│   ├── providers/          LLM and STT provider interfaces + mock implementations
+│   ├── parsers/            rule-based structure analysis, practice generation
+│   ├── smalltalk/          prompts, turn cap, goodbye detection
+│   ├── db/                 SQLite CRUD and aggregates
+│   └── feedback.ts         LLM output validation and coercion
+└── middleware.ts           PIN gate
+tests/                      Vitest unit and route tests
 ```
-
----
-
-## Tech Stack
-
-- **Next.js 14**(App Router) + TypeScript + Tailwind CSS
-- **better-sqlite3 12.x** — 로컬 DB, 싱글 유저 (Node 26 호환)
-- **mlx-whisper** — Apple Silicon STT (`stt-server/`)
-- LLM / STT **provider 추상화 레이어**
-- **Vitest** — 단위/통합 테스트
-
----
-
-## 배포
-
-풀스택 Next 앱이라(API 라우트 + SQLite + 로컬 모델 의존) **GitHub Pages 같은 정적 호스팅엔 올라가지 않는다.** 서버 환경에서 직접 서빙한다:
-
-1. `npm run build` 후 `npm start`(또는 프로세스 매니저에 등록)로 실행.
-2. 외부 접근이 필요하면 **Cloudflare Tunnel** 등으로 `localhost:<포트>`를 노출.
-3. **4자리 PIN 게이트**(`AUTH_CODES`)로 보호 — 미들웨어가 모든 페이지/`/api`를 쿠키 검증 뒤에 둔다. 안 그러면 누구나 로컬 모델(Gemma/STT)을 굴릴 수 있다. 더 강한 인증이 필요하면 Cloudflare Access를 앞단에 추가.
-
-> 앱이 페이지와 `/api`를 같은 오리진에서 서빙하므로 cross-origin CORS/프리플라이트 이슈는 없다.
